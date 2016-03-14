@@ -206,16 +206,16 @@ void AperiodicEnergy::Compute(const VectorBase<BaseFloat> &wave,
 
     /* BP: this code allows us to speed things up a bit for unvoiced regions
        but it may introduce some jumps for no good reasons, so commented out for now! */
-    /* if (voicing_prob(r) <= 0.0) {  // unvoiced region
+    if (voicing_prob(r) <= 0.0) {  // unvoiced region
       // While the aperiodic energy will not be used during synthesis of the
       // unvoiced regions, it is still modeled as a separate stream in the HMM
       // and so we set it to the log-filterbank values.
       //mel_banks_->Compute(power_spectrum, &binned_energies);
       //binned_energies.ApplyLog();
-	for (int i = 0; i < dim_out; i++) binned_energies(i) = 0.0;
-	this_ap_energy.CopyFromVec(binned_energies);
-	continue;
-	}*/
+        for (int i = 0; i < dim_out; i++) binned_energies(i) = 0.0;
+        this_ap_energy.CopyFromVec(binned_energies);
+        continue;
+	}
     if (opts_.use_hts_bands && dim_out == 5)
         Compute_HTS_bands(power_spectrum, &binned_energies);
     else
