@@ -19,13 +19,14 @@
 
 #TMP=/scratch/$USER/tmp
 #mkdir -p $TMP
+period=5
 srate=16000
 delta_order=0
 mcep_order=39
 bndap_order=21
 f0_order=2
-# Continuous f0
-voice_thresh=-100.0
+# Continuous f0, no mixing
+voice_thresh=0.8
 alpha=0.55
 fftlen=1024
 tmpdir=/tmp
@@ -106,7 +107,7 @@ if [ "$var_file" != "" ]; then
 	bndap_win=""
     fi
     echo "Extracting variances..."
-    cat $var_file | awk '{printf "%f ", sqrt($2)}' > $var
+    cat $var_file | awk '{printf "%f ", $2}' > $var
     cat $var | cut -d " " -f $mcep_offset-$(( $mcep_offset + $mcep_len - 1 )) > $vmcep
     cat $var | cut -d " " -f $f0_offset-$(( $f0_offset + $f0_len - 1 )) > $vf0
     cat $var | cut -d " " -f $bndap_offset-$(( $bndap_offset + $bndap_len - 1 )) > $vbap
@@ -143,10 +144,19 @@ fi
 #/idiap/user/pehonnet/HTS-ENGINE-for-HTS-2.1/
 #synthesis_fft -float -f $samp_freq -sigp 1.2 -cornf 1000 -bw 70.0 -delfrac 0.2 -sd 0.5 -mel -bap -order $mcep_order -apfile $bap -alpha $alpha $f0 $mcep $2
 
-cmd="python $HOME/cereproc/trunk/apps/dsplab/mlsa.py -n -e -C -a $alpha -m $order -s $srate -f $fftlen -b $bndap_order -i $tmpdir -o $tmpdir $base"
-echo $cmd
-$cmd
-cp $tmpdir/$base.wav $out_wav
+if [ "$usecere" ]; then
+    cmd="python $HOME/cereproc/trunk/apps/dsplab/mlsa.py -n -C -a $alpha -m $order -s $srate -f $fftlen -b $bndap_order -i $tmpdir -o $tmpdir $base"
+    echo $cmd
+    $cmd
+    cp $tmpdir/$base.wav $out_wav
+else   
+    x2x +af $mcep > $mcep.float
+    psize=`echo "$period * $srate / 1000" | bc`
+    cat $f0 | awk -v srate=$srate '{if ($1 > 0) print srate / $1; else print 0.0}' | x2x +af \
+        | excite -p $psize \
+        | mlsadf -m $order -a $alpha -p $psize $mcep.float | x2x +fs > $tmpdir/data.mcep.syn
+    sox -t raw -c 1 -r $srate -s -b 16 $tmpdir/data.mcep.syn $out_wav
+fi
 
 #-sigp 1.2
 #          -sd 0.5
