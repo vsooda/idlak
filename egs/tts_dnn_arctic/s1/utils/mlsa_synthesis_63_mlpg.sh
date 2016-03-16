@@ -19,6 +19,7 @@
 
 #TMP=/scratch/$USER/tmp
 #mkdir -p $TMP
+use_cere=0
 period=5
 srate=16000
 delta_order=0
