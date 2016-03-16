@@ -27,6 +27,7 @@ source path.sh
 
 # Arctic database usual sampling rate; although 32k is
 # also available for some speakers.
+# TODO: upgrade to using 48k data from HTS demo
 srate=16000
 FRAMESHIFT=0.005
 TMPDIR=/tmp
@@ -35,6 +36,9 @@ rm -rf data/train data/eval data/dev data/train_* data/eval_* data/dev_*
 
 # Speaker ID
 spks="slt" # can add any of awb, bdl, clb, jmk, ksp, rms
+
+echo "##### Step 0: data preparation #####"
+mkdir -p data/{train,dev}
 for spk in $spks; do
     # URL of arctic DB
     arch=cmu_us_${spk}_arctic-0.95-release.tar.bz2
@@ -57,53 +61,51 @@ for spk in $spks; do
 	cd ../..
     fi
 
-    # Create train, dev, eval sets
+    # Create train, dev sets
     dev_pat='arctic_a0??2'
     dev_rgx='arctic_a0..2'
-    eval_pat='arctic_b0??2'
-    eval_rgx='arctic_b0..2'
-    train_pat='arctic_????[^2]'
-    train_rgx='arctic_....[^2]'
+    train_pat='arctic_?????'
+    train_rgx='arctic_.....'
+
     makeid="xargs -n 1 -I {} -n 1 awk -v lst={} -v spk=$spk BEGIN{print(gensub(\".*/([^.]*)[.].*\",spk\"_\\\\1\",\"g\",lst),lst)}"
     makelab="awk -v spk=$spk '{u=\$2;\$1=\"\";\$2=\"\";\$NF=\"\";print(\"<fileid id=\\\"\" spk \"_\" u \"\\\">\",substr(\$0,4,length(\$0)-5),\"</fileid>\")}'"
-    mkdir -p data/{train,dev,eval}
 
     find $audio_dir -iname "$train_pat".wav  | sort | $makeid >> data/train/wav.scp
     find $audio_dir -iname "$dev_pat".wav    | sort | $makeid >> data/dev/wav.scp
-    find $audio_dir -iname "$eval_pat".wav   | sort | $makeid >> data/eval/wav.scp
 
     grep "$train_rgx" $label_dir/cmuarctic.data | sort | eval "$makelab" >> data/train/text.xml
     grep "$dev_rgx"   $label_dir/cmuarctic.data | sort | eval "$makelab" >> data/dev/text.xml
-    grep "$eval_rgx"  $label_dir/cmuarctic.data | sort | eval "$makelab" >> data/eval/text.xml
 
     # Generate utt2spk / spk2utt info
-    for step in train dev eval; do
-	cat data/$step/wav.scp | awk -v spk=$spk '{print $1, spk}' >> data/$step/utt2spk
-	utt2spk_to_spk2utt.pl < data/$step/utt2spk > data/$step/spk2utt
+    # TODO: ensure train / dev list are disjoint
+    for step in train dev; do
+	    cat data/$step/wav.scp | awk -v spk=$spk '{print $1, spk}' >> data/$step/utt2spk
+	    utt2spk_to_spk2utt.pl < data/$step/utt2spk > data/$step/spk2utt
     done
 done
 
 mkdir -p data/full
 # This will be used for aligning the labels only
 for k in text.xml wav.scp utt2spk; do
-    cat data/{train,dev,eval}/$k | sort > data/full/$k
+    cat data/{train,dev}/$k | sort -u > data/full/$k
 done
 utt2spk_to_spk2utt.pl < data/full/utt2spk > data/full/spk2utt
 
 # Turn transcription into valid xml files
-for step in full train dev eval; do
+for step in full train dev; do
     cat data/$step/text.xml | awk 'BEGIN{print "<document>"}{print}END{print "</document>"}' > data/$step/text2
     mv data/$step/text2 data/$step/text.xml
 done
 
 # Alice test set
-mkdir -p data/eval_alice
-cp $KALDI_ROOT/idlak-data/en/testdata/alice.xml data/eval_alice/text.xml
+mkdir -p data/eval
+cp $KALDI_ROOT/idlak-data/en/testdata/alice.xml data/eval/text.xml
 
 ############################################
 ##### Step 1: acoustic data generation #####
 ############################################
 
+echo "##### Step 1: acoustic data generation #####"
 export featdir=$TMPDIR/dnn_feats/arctic
 
 # Use kaldi to generate MFCC features for alignment
@@ -114,7 +116,7 @@ done
 
 # Use Kaldi + SPTK tools to generate F0 / BNDAP / MCEP
 # NB: respective configs are in conf/pitch.conf, conf/bndap.conf, conf/mcep.conf
-for step in train dev eval; do
+for step in train dev; do
     rm -f data/$step/feats.scp
     # Generate f0 features
     steps/make_pitch.sh   data/$step    exp/make_pitch/$step   $featdir;
@@ -126,22 +128,22 @@ for step in train dev eval; do
     # We therefore do something speaker specific using the mean / std deviation from
     # the pitch for each speaker.
     for spk in $spks; do
-	min_f0=`copy-feats scp:"awk -v spk=$spk '(\\$1 == spk){print}' data/$step/cmvn.scp |" ark,t:- \
+	    min_f0=`copy-feats scp:"awk -v spk=$spk '(\\$1 == spk){print}' data/$step/cmvn.scp |" ark,t:- \
 	    | awk '(NR == 2){n = \$NF; m = \$2 / n}(NR == 3){std = sqrt(\$2/n - m * m)}END{print m - 2*std}'`
-	echo $min_f0
-	# Rule of thumb recipe; probably try with other window sizes?
-	bndapflen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 4.6 * 1000.0 / f0 + 0.5}'`
-	mcepflen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 2.3 * 1000.0 / f0 + 0.5}'`
-	f0flen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 2.3 * 1000.0 / f0 + 0.5}'`
-	echo "using wsizes: $bndapflen $mcepflen"
-	subset_data_dir.sh --spk $spk data/$step 100000 data/${step}_$spk
-	#cp data/$step/pitch_feats.scp data/${step}_$spk/
-	# Regenerate pitch with more appropriate window
-	steps/make_pitch.sh --frame_length $f0flen    data/${step}_$spk exp/make_pitch/${step}_$spk  $featdir;
-	# Generate Band Aperiodicity feature
-	steps/make_bndap.sh --frame_length $bndapflen data/${step}_$spk exp/make_bndap/${step}_$spk  $featdir
-	# Generate Mel Cepstral features
-	steps/make_mcep.sh  --frame_length $mcepflen  data/${step}_$spk exp/make_mcep/${step}_$spk   $featdir	
+	    echo $min_f0
+	    # Rule of thumb recipe; probably try with other window sizes?
+	    bndapflen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 4.6 * 1000.0 / f0 + 0.5}'`
+	    mcepflen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 2.3 * 1000.0 / f0 + 0.5}'`
+	    f0flen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 2.3 * 1000.0 / f0 + 0.5}'`
+	    echo "using wsizes: $bndapflen $mcepflen"
+	    subset_data_dir.sh --spk $spk data/$step 100000 data/${step}_$spk
+	    #cp data/$step/pitch_feats.scp data/${step}_$spk/
+	    # Regenerate pitch with more appropriate window
+	    steps/make_pitch.sh --frame_length $f0flen    data/${step}_$spk exp/make_pitch/${step}_$spk  $featdir;
+	    # Generate Band Aperiodicity feature
+	    steps/make_bndap.sh --frame_length $bndapflen data/${step}_$spk exp/make_bndap/${step}_$spk  $featdir
+	    # Generate Mel Cepstral features
+	    steps/make_mcep.sh  --frame_length $mcepflen  data/${step}_$spk exp/make_mcep/${step}_$spk   $featdir	
     done
     # Merge features
     cat data/${step}_*/bndap_feats.scp > data/$step/bndap_feats.scp
@@ -152,14 +154,17 @@ for step in train dev eval; do
     steps/compute_cmvn_stats.sh data/$step exp/compute_cmvn/$step   data/$step
 done
 
+#cat data/{train,dev}/feats.scp | awk '{ if (w[$1]){} else {w[$1] = 1; print}}' > data/full/feats.scp
+
 ############################################
 #####      Step 2: label creation      #####
 ############################################
 
+echo "##### Step 2: label creation #####"
 # We are using the idlak front-end for processing the text
 tpdb=$KALDI_ROOT/idlak-data/en/ga/
 dict=data/local/dict
-for step in train dev eval full eval_alice; do
+for step in train dev eval full; do
     # Normalise text and generate phoneme information
     idlaktxp --pretty --tpdb=$tpdb data/$step/text.xml data/$step/text_norm.xml
     # Generate full labels
@@ -173,10 +178,11 @@ python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 0 data/full
 ## 3a: create kaldi forced alignment ##
 #######################################
 
+echo "##### Step 3: forced alignment #####"
 lang=data/lang
 rm -rf $dict/lexiconp.txt $lang
-utils/prepare_lang.sh --share-silence-phones true $dict "<OOV>" data/local/lang_tmp $lang
-utils/validate_lang.pl $lang
+utils/prepare_lang.sh --num-nonsil-states 5 --share-silence-phones true $dict "<OOV>" data/local/lang_tmp $lang
+#utils/validate_lang.pl $lang
 
 # Now running the normal kaldi recipe for forced alignment
 expa=exp-align
@@ -215,7 +221,7 @@ steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
 
 # Convert to phone-state alignement
 for step in full; do
-    ali=$expa/tri2_ali_$step
+    ali=$expa/quin_ali_$step
     # Extract phone alignment
     ali-to-phones --per-frame $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:- \
 	| utils/int2sym.pl -f 2- $lang/phones.txt > $ali/phones.txt
@@ -237,6 +243,8 @@ for step in full; do
     python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 2 data/$step/text_afull.xml data/$step/cex.ark > data/$step/cex_output_dump
     
     # Merge alignment with output from idlak cex front-end => gives you a nice vector
+    # NB: for triphone alignment:
+    # make-fullctx-ali-dnn  --phone-context=3 --mid-context=1 --max-sil-phone=15 $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:data/$step/cex.ark ark,t:data/$step/ali
     make-fullctx-ali-dnn --max-sil-phone=15 $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:data/$step/cex.ark ark,t:data/$step/ali
 
 
@@ -246,34 +254,53 @@ for step in full; do
 	| copy-feats ark:- ark,scp:$featdir/in_feats_$step.ark,$featdir/in_feats_$step.scp
 done
 
-# Generate and align test set.
-for step in eval_alice; do
-    idlaktxp --pretty --tpdb=$tpdb data/$step/text.xml - \
-     | idlakcex --pretty --cex-arch=default --tpdb=$tpdb - data/$step/text_full.xml
-    python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 2 -r "alice" \
-        data/$step/text_full.xml data/full/cex.ark.freq data/$step/cex.ark > data/$step/cex_output_dump
+# HACKY
+# Generate features for duration modelling
+# we remove relative position within phone and state
+copy-feats ark:$featdir/in_feats_full.ark ark,t:- \
+    | awk -v nstate=5 'BEGIN{oldkey = 0; oldstate = -1; for (s = 0; s < nstate; s++) asd[s] = 0}
+function print_phone(vkey, vasd, vpd) {
+      for (s = 0; s < nstate; s++) {
+         print vkey, s, vasd[s], vpd;
+         asd[s] = 0;
+      }
+}
+(NF == 2){print}
+(NF > 2){
+   n = NF; 
+   if ($NF == "]") n = NF - 1;
+   state = $(n-4); sd = $(n-3); pd = $(n-1);
+   for (i = n-4; i <= NF; i++) $i = "";
+   len = length($0);
+   if (n != NF) len = len -1;
+   key = substr($0, 1, len - 5);
+   if ((key != oldkey) && (oldkey != 0)) {
+      print_phone(oldkey, asd, opd);
+      oldstate = -1;
+   }
+   if (state != oldstate) {
+      asd[state] += sd;
+   }
+   opd = pd;
+   oldkey = key;
+   oldstate = state;
+   if (NF != n) {
+      print_phone(key, asd, opd);
+      oldstate = -1;
+      oldkey = 0;
+      print "]";
+   }
+}' > $featdir/tmp_durfeats_full.ark
 
-    # HACK: recover duration from HTS demo samples
-    # NB: you need to have run the idlak test recipe all the way through!
-   HTS_DEMO_LOCATION=$KALDI_ROOT/idlak-voice-build/utils/hts_demo/
-   (
-       echo '#!MLF!#';
-       for i in $HTS_DEMO_LOCATION/HTS-demo_CMU-ARCTIC-SLT/gen/qst001/ver1/hts_engine/*.slab; do
-           cat $i | awk -v id=`basename $i .slab` 'BEGIN{print "\"" id ".lab\""}{p = gensub("[^+-]*-([^+-]+)[+][^+-]*:.*", "\\1","g",$3); if (p == "ax") p = "ah"; print $1, $2, p "_" $4 }'; 
-       done
-   ) > data/$step/hts_lab.mlf
+duration_feats="ark:$featdir/tmp_durfeats_full.ark"
+nfeats=$(feat-to-dim "$duration_feats" -)
+# Input 
+select-feats 0-$(( $nfeats - 3 )) "$duration_feats" ark,scp:$featdir/in_durfeats_full.ark,$featdir/in_durfeats_full.scp
+# Output: duration of phone and state are assumed to be the 2 last features
+select-feats $(( $nfeats - 2 ))-$(( $nfeats - 1 )) "$duration_feats" ark,scp:$featdir/out_durfeats_full.ark,$featdir/out_durfeats_full.scp
 
-   # Align lab and idlak full labels
-   python utils/map_mono_to_full.py data/$step/text_full.xml data/$step/hts_lab.mlf data/$step/labels_afull.mlf
-
-   # Same as make-fullctx-ali-dnn, but using mlf as input
-   python utils/make_fullctx_mlf_dnn.py data/$step/labels_afull.mlf data/$step/cex.ark data/$step/feat.ark
-   copy-feats ark:data/$step/feat.ark ark,scp:$featdir/in_feats_$step.ark,$featdir/in_feats_$step.scp
-   #cp $featdir/in_feats_$step.scp 
-done
-
-# Split in train / dev / eval
-for step in train dev eval; do
+# Split in train / dev
+for step in train dev; do
     dir=lbldata/$step
     mkdir -p $dir
     cp data/$step/{utt2spk,spk2utt} $dir
@@ -281,67 +308,97 @@ for step in train dev eval; do
     steps/compute_cmvn_stats.sh $dir $dir $dir
 done
 
-# Create test set
-for step in eval_alice; do
-    dir=lbldata/$step
+# Same for duration
+for step in train dev; do
+    dir=lbldurdata/$step
     mkdir -p $dir
-    cp $featdir/in_feats_$step.scp $dir/feats.scp
+    cp data/$step/{utt2spk,spk2utt} $dir
+    utils/filter_scp.pl $dir/utt2spk $featdir/in_durfeats_full.scp > $dir/feats.scp
+    steps/compute_cmvn_stats.sh $dir $dir $dir
+
+    dir=durdata/$step
+    mkdir -p $dir
+    cp data/$step/{utt2spk,spk2utt} $dir
+    utils/filter_scp.pl $dir/utt2spk $featdir/out_durfeats_full.scp > $dir/feats.scp
+    steps/compute_cmvn_stats.sh $dir $dir $dir
+done
+
+#### PART OF SYNTHESIS ####
+# Generate CEX features for test set.
+for step in eval; do
+    idlaktxp --pretty --tpdb=$tpdb data/$step/text.xml - \
+     | idlakcex --pretty --cex-arch=default --tpdb=$tpdb - data/$step/text_full.xml
+    python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 2 -r "alice" \
+        data/$step/text_full.xml data/full/cex.ark.freq data/$step/cex.ark > data/$step/cex_output_dump
+    # Generate input feature for duration modelling
+    cat data/$step/cex.ark \
+        | awk '{print $1, "["; $1=""; na = split($0, a, ";"); for (i = 1; i < na; i++) for (state = 0; state < 5; state++) print a[i], state; print "]"}' \
+        | copy-feats ark:- ark,scp:$featdir/in_durfeats_$step.ark,$featdir/in_durfeats_$step.scp
+done
+
+# Duration based test set
+for step in eval; do
+    dir=lbldurdata/$step
+    mkdir -p $dir
+    cp $featdir/in_durfeats_$step.scp $dir/feats.scp
     cut -d ' ' -f 1 $dir/feats.scp | awk -v spk=$spk '{print $1, spk}' > $dir/utt2spk
     utils/utt2spk_to_spk2utt.pl $dir/utt2spk > $dir/spk2utt
     steps/compute_cmvn_stats.sh $dir $dir $dir
 done
 
+
 ##############################
 ## 4. Train DNN
 ##############################
 
+echo "##### Step 4: training DNNs #####"
+
 exp=exp_dnn
 acdir=data
 lbldir=lbldata
+mkdir -p $exp
+
+# Very basic one for testing
+#mkdir -p $exp
+#dir=$exp/tts_dnn_train_3e
+#$cuda_cmd $dir/_train_nnet.log steps/train_nnet_basic.sh --config conf/3-layer-nn.conf --learn_rate 0.2 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --randomize true --bunch_size 50 --mlpOption " " --hid-dim 300 $lbldir/train $lbldir/dev $acdir/train $acdir/dev $dir
+
+echo " ### Step 4a: duration model DNN ###"
+# A. Small one for duration modelling
+durdir=durdata
+lbldurdir=lbldurdata
+expdurdir=$exp/tts_dnn_dur_3_delta_quin5
+rm -rf $expdurdir
+$cuda_cmd $expdurdir/_train_nnet.log steps/train_nnet_basic.sh --delta_order 2 --config conf/3-layer-nn-splice5.conf --learn_rate 0.02 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --max_iters 50 --randomize true --cache_size 50000 --bunch_size 200 --mlpOption " " --hid-dim 100 $lbldurdir/train $lbldurdir/dev $durdir/train $durdir/dev $expdurdir
+
+# B. Larger DNN for acoustic features
+echo " ### Step 4b: acoustic model DNN ###"
 #ensure consistency in lists
 #for dir in $lbldir $acdir; do
-for class in train dev eval; do
+for class in train dev; do
     cp $lbldir/$class/feats.scp $lbldir/$class/feats_full.scp
     cp $acdir/$class/feats.scp $acdir/$class/feats_full.scp
     cat $acdir/$class/feats_full.scp | awk -v lst=$lbldir/$class/feats_full.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $acdir/$class/feats.scp
     cat $lbldir/$class/feats_full.scp | awk -v lst=$acdir/$class/feats_full.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $lbldir/$class/feats.scp
 done
 
-
-# Very basic one for testing
-mkdir -p $exp
-dir=$exp/tts_dnn_train_3e
-$cuda_cmd $dir/_train_nnet.log steps/train_nnet_basic.sh --config conf/3-layer-nn.conf --learn_rate 0.2 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --randomize true --bunch_size 50 --mlpOption " " --hid-dim 300 $lbldir/train $lbldir/dev $acdir/train $acdir/dev $dir
-
-# A bit more sophisticated, with splicing and more units
-dir=$exp/tts_dnn_train_3_splice10
-$cuda_cmd $dir/_train_nnet.log steps/train_nnet_basic.sh --config conf/3-layer-nn-splice10.conf --learn_rate 0.2 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --randomize true --bunch_size 10 --mlpOption " " --hid-dim 500 $lbldir/train $lbldir/dev $acdir/train $acdir/dev $dir
-
-# A bit more sophisticated, with deltas and more units
-dir=$exp/tts_dnn_train_3_deltasc2
-rm -rf $dir
-$cuda_cmd $dir/_train_nnet.log steps/train_nnet_basic.sh --delta_order 2 --config conf/3-layer-nn-splice5.conf --learn_rate 0.04 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --randomize true --cache_size 50000 --bunch_size 200 --mlpOption " " --hid-dim 700 $lbldir/train $lbldir/dev $acdir/train $acdir/dev $dir
+dnndir=$exp/tts_dnn_train_3_deltasc2_quin5
+rm -rf $dnndir
+$cuda_cmd $dnndir/_train_nnet.log steps/train_nnet_basic.sh --delta_order 2 --config conf/3-layer-nn-splice5.conf --learn_rate 0.04 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --randomize true --cache_size 50000 --bunch_size 200 --mlpOption " " --hid-dim 700 $lbldir/train $lbldir/dev $acdir/train $acdir/dev $dnndir
 
 ##############################
 ## 5. Synthesis
 ##############################
-
+echo "##### Step 5: synthesis #####"
 # Original samples:
+echo "Synthesizing vocoded training samples"
 mkdir -p exp_dnn/orig2/cmp exp_dnn/orig2/wav
 copy-feats scp:data/eval/feats.scp ark,t:- | awk -v dir=exp_dnn/orig2/cmp/ '($2 == "["){if (out) close(out); out=dir $1 ".cmp";}($2 != "["){if ($NF == "]") $NF=""; print $0 > out}'
 for cmp in exp_dnn/orig2/cmp/*.cmp; do
     utils/mlsa_synthesis_63_mlpg.sh --alpha 0.42 --fftlen 512 $cmp exp_dnn/orig2/wav/`basename $cmp .cmp`.wav
 done
 
-# Forward pass with test => creates $dir/tst_forward/cmp/*
-utils/make_forward_fmllr.sh $dir $lbldir/eval $dir/tst_forward/ ""
-# Synthesis
-mkdir -p $dir/tst_forward/wav
-for cmp in $dir/tst_forward/cmp/*.cmp; do
-    utils/mlsa_synthesis_63_mlpg.sh --alpha 0.42 --fftlen 512 $cmp $dir/tst_forward/wav/`basename $cmp .cmp`.wav
-done
-
-# Variant with mlpg: simply use mean / variance from coefficients
+# Variant with mlpg: requires mean / variance from coefficients
 copy-feats scp:data/train/feats.scp ark:- \
     | add-deltas --delta-order=2 ark:- ark:- \
     | compute-cmvn-stats --binary=false ark:- - \
@@ -351,10 +408,69 @@ copy-feats scp:data/train/feats.scp ark:- \
 END{for (i = 1; i <= nv; i++) print mean[i], var[i]}' \
     > data/train/var_cmp.txt
 
-utils/make_forward_fmllr.sh $dir $lbldir/eval $dir/tst_forward/ ""
-
-# Using alice test set:
-utils/make_forward_fmllr.sh $dir $lbldir/eval_alice $dir/alicetst_forward/ ""
-mkdir -p $dir/alicetst_forward/wav_mlpg/; for cmp in $dir/alicetst_forward/cmp/*.cmp; do
-    utils/mlsa_synthesis_63_mlpg.sh --alpha 0.42 --fftlen 512 --delta_order 2 $cmp $dir/alicetst_forward/wav_mlpg/`basename $cmp .cmp`.wav data/train/var_cmp.txt
+# Generate label with DNN-generated duration
+echo "Synthesizing MLPG eval samples"
+#  1. forward pass through duration DNN
+utils/make_forward_fmllr.sh $expdurdir $lbldurdir/eval $expdurdir/tst_forward/ ""
+#  2. make the duration consistent, generate labels with duration information added
+(echo '#!MLF!#'; for cmp in $expdurdir/tst_forward/cmp/*.cmp; do
+    cat $cmp | awk -v nstate=5 -v id=`basename $cmp .cmp` 'BEGIN{print "\"" id ".lab\""; tstart = 0 }
+{
+  pd += $2;
+  sd[NR % nstate] = $1}
+(NR % nstate == 0){
+   mpd = pd / nstate;
+   smpd = 0;
+   for (i = 1; i <= nstate; i++) smpd += sd[i % nstate];
+   rmpd = int((smpd + mpd) / 2 + 0.5);
+   # Normal phones
+   if (int(sd[0] + 0.5) == 0) {
+      for (i = 1; i <= 3; i++) {
+         sd[i % nstate] = int(sd[i % nstate] / smpd * rmpd + 0.5);
+      }
+      if (sd[3] <= 0) sd[3] = 1;
+      for (i = 4; i <= nstate; i++) sd[i % nstate] = 0;
+   }
+   # Silence phone
+   else {
+      for (i = 1; i <= nstate; i++) {
+          sd[i % nstate] = int(sd[i % nstate] / smpd * rmpd + 0.5);
+      }
+      if (sd[0] <= 0) sd[0] = 1;
+   }
+   if (sd[1] <= 0) sd[1] = 1;
+   smpd = 0;
+   for (i = 1; i <= nstate; i++) smpd += sd[i % nstate];
+   for (i = 1; i <= nstate; i++) {
+        if (sd[i % nstate] > 0) {
+           tend = tstart + sd[i % nstate] * 50000;
+           print tstart, tend, int(NR / 5), i-1;
+           tstart = tend;
+        }
+   }
+   pd = 0;
+}' 
+done) > data/eval/synth_lab.mlf
+# 3. Turn them into DNN input labels (i.e. one sample per frame)
+for step in eval; do
+    python utils/make_fullctx_mlf_dnn.py data/$step/synth_lab.mlf data/$step/cex.ark data/$step/feat.ark
+    copy-feats ark:data/$step/feat.ark ark,scp:$featdir/in_feats_$step.ark,$featdir/in_feats_$step.scp
 done
+for step in eval; do
+    dir=lbldata/$step
+    mkdir -p $dir
+    cp $featdir/in_feats_$step.scp $dir/feats.scp
+    cut -d ' ' -f 1 $dir/feats.scp | awk -v spk=$spk '{print $1, spk}' > $dir/utt2spk
+    utils/utt2spk_to_spk2utt.pl $dir/utt2spk > $dir/spk2utt
+    steps/compute_cmvn_stats.sh $dir $dir $dir
+done
+# 4. Forward pass through big DNN
+utils/make_forward_fmllr.sh $dnndir $lbldir/eval $dnndir/tst_forward/ ""
+
+# 5. Vocoding
+# NB: these are the settings for 16k
+mkdir -p $dnndir/tst_forward/wav_mlpg/; for cmp in $dnndir/tst_forward/cmp/*.cmp; do
+    utils/mlsa_synthesis_63_mlpg.sh --alpha 0.42 --fftlen 512 --srate $srate --bndap_order 21 --mcep_order 39 --delta_order 2 $cmp $dnndir/tst_forward/wav_mlpg/`basename $cmp .cmp`.wav data/train/var_cmp.txt
+done
+
+
