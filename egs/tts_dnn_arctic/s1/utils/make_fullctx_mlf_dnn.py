@@ -14,13 +14,14 @@ def parse_mlf(monofile):
             out[id] = []
         else:
             ll = l.strip().split()
-            phone_array = ll[3]
+            phone_array = ll[2]
             phone_name = re.sub("[^-]+[-]([^+-]+)[^+]+","\\1", phone_array)
             phone_state = int(ll[-1])
             start_time = float(ll[0])
             end_time = float(ll[1])
             out[id].append((phone_name, phone_state, start_time, end_time))
     fp.close()
+    #print out
     return out
 
 def parse_fullctx(fullctxfile):

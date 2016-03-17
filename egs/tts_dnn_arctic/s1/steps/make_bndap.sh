@@ -90,7 +90,7 @@ else
 fi
 
 #output="ark,t:| awk '(\$2 == \"[\"){print}(\$2 != \"[\"){if (\$NF == \"]\") {end=1; NF=NF-1}; for (i = 1; i <= NF; i++) if (\$i >= 0.0) printf \"0.0 \" ; else printf \"%f \", 20 * (\$i) / log(10); if (end) printf \"]\n\"; else printf \"\n\"; end = 0}'"
-bndap_feats="ark,s,cs:compute-aperiodic-feats --frame-length=$frame_length --verbose=2 --config=$bndap_config $in_feats scp:$pitch_scp ark:- |"
+bndap_feats="ark,s,cs:compute-aperiodic-feats --frame-length=$frame_length --config=$bndap_config $in_feats scp:$pitch_scp ark:- |"
 
 
 $cmd JOB=1:$nj $logdir/make_bndap.JOB.log \

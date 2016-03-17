@@ -19,7 +19,7 @@
 
 #TMP=/scratch/$USER/tmp
 #mkdir -p $TMP
-use_cere=0
+synth=excitation # or excitation, cere
 period=5
 srate=16000
 delta_order=0
@@ -145,18 +145,33 @@ fi
 #/idiap/user/pehonnet/HTS-ENGINE-for-HTS-2.1/
 #synthesis_fft -float -f $samp_freq -sigp 1.2 -cornf 1000 -bw 70.0 -delfrac 0.2 -sd 0.5 -mel -bap -order $mcep_order -apfile $bap -alpha $alpha $f0 $mcep $2
 
-if [ "$usecere" ]; then
-    cmd="python $HOME/cereproc/trunk/apps/dsplab/mlsa.py -n -C -a $alpha -m $order -s $srate -f $fftlen -b $bndap_order -i $tmpdir -o $tmpdir $base"
+if [ "$synth" = "cere" ]; then
+    if [ $voice_thresh -gt 0 ]; then
+        mlopts="-n"
+    else
+        mlopts="-p"
+    fi
+    cmd="python $HOME/cereproc/trunk/apps/dsplab/mlsa.py $mlopts -C -a $alpha -m $order -s $srate -f $fftlen -b $bndap_order -i $tmpdir -o $tmpdir $base"
     echo $cmd
     $cmd
     cp $tmpdir/$base.wav $out_wav
-else   
+elif [ "$synth" = "excitation" ]; then
     x2x +af $mcep > $mcep.float
     psize=`echo "$period * $srate / 1000" | bc`
-    cat $f0 | awk -v srate=$srate '{if ($1 > 0) print srate / $1; else print 0.0}' | x2x +af \
+    # We have to drop the first few F0 frames to match SPTK behaviour
+    #cat $f0 | awk -v srate=$srate '(NR > 2){if ($1 > 0) print srate / $1; else print 0.0}' | x2x +af \
+    #    | excite -p $psize \
+    python utils/excitation.py -G 0.8 -s $srate -f $fftlen -b $bndap_order $f0 $bap > $tmpdir/resid.float
+    cat $tmpdir/resid.float | mlsadf -m $order -a $alpha -p $psize $mcep.float | x2x -o +fs > $tmpdir/data.mcep.syn
+    sox --norm -t raw -c 1 -r $srate -s -b 16 $tmpdir/data.mcep.syn $out_wav
+else
+    x2x +af $mcep > $mcep.float
+    psize=`echo "$period * $srate / 1000" | bc`
+    # We have to drop the first few F0 frames to match SPTK behaviour
+    cat $f0 | awk -v srate=$srate '(NR > 2){if ($1 > 0) print srate / $1; else print 0.0}' | x2x +af \
         | excite -p $psize \
-        | mlsadf -m $order -a $alpha -p $psize $mcep.float | x2x +fs > $tmpdir/data.mcep.syn
-    sox -t raw -c 1 -r $srate -s -b 16 $tmpdir/data.mcep.syn $out_wav
+        | mlsadf -m $order -a $alpha -p $psize $mcep.float | x2x -o +fs > $tmpdir/data.mcep.syn
+    sox --norm -t raw -c 1 -r $srate -s -b 16 $tmpdir/data.mcep.syn $out_wav
 fi
 
 #-sigp 1.2

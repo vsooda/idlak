@@ -97,10 +97,6 @@ for step in full train dev; do
     mv data/$step/text2 data/$step/text.xml
 done
 
-# Alice test set
-mkdir -p data/eval
-cp $KALDI_ROOT/idlak-data/en/testdata/alice.xml data/eval/text.xml
-
 ############################################
 ##### Step 1: acoustic data generation #####
 ############################################
@@ -164,7 +160,7 @@ echo "##### Step 2: label creation #####"
 # We are using the idlak front-end for processing the text
 tpdb=$KALDI_ROOT/idlak-data/en/ga/
 dict=data/local/dict
-for step in train dev eval full; do
+for step in train dev full; do
     # Normalise text and generate phoneme information
     idlaktxp --pretty --tpdb=$tpdb data/$step/text.xml data/$step/text_norm.xml
     # Generate full labels
@@ -323,29 +319,6 @@ for step in train dev; do
     steps/compute_cmvn_stats.sh $dir $dir $dir
 done
 
-#### PART OF SYNTHESIS ####
-# Generate CEX features for test set.
-for step in eval; do
-    idlaktxp --pretty --tpdb=$tpdb data/$step/text.xml - \
-     | idlakcex --pretty --cex-arch=default --tpdb=$tpdb - data/$step/text_full.xml
-    python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 2 -r "alice" \
-        data/$step/text_full.xml data/full/cex.ark.freq data/$step/cex.ark > data/$step/cex_output_dump
-    # Generate input feature for duration modelling
-    cat data/$step/cex.ark \
-        | awk '{print $1, "["; $1=""; na = split($0, a, ";"); for (i = 1; i < na; i++) for (state = 0; state < 5; state++) print a[i], state; print "]"}' \
-        | copy-feats ark:- ark,scp:$featdir/in_durfeats_$step.ark,$featdir/in_durfeats_$step.scp
-done
-
-# Duration based test set
-for step in eval; do
-    dir=lbldurdata/$step
-    mkdir -p $dir
-    cp $featdir/in_durfeats_$step.scp $dir/feats.scp
-    cut -d ' ' -f 1 $dir/feats.scp | awk -v spk=$spk '{print $1, spk}' > $dir/utt2spk
-    utils/utt2spk_to_spk2utt.pl $dir/utt2spk > $dir/spk2utt
-    steps/compute_cmvn_stats.sh $dir $dir $dir
-done
-
 
 ##############################
 ## 4. Train DNN
@@ -393,9 +366,9 @@ echo "##### Step 5: synthesis #####"
 # Original samples:
 echo "Synthesizing vocoded training samples"
 mkdir -p exp_dnn/orig2/cmp exp_dnn/orig2/wav
-copy-feats scp:data/eval/feats.scp ark,t:- | awk -v dir=exp_dnn/orig2/cmp/ '($2 == "["){if (out) close(out); out=dir $1 ".cmp";}($2 != "["){if ($NF == "]") $NF=""; print $0 > out}'
+copy-feats scp:data/dev/feats.scp ark,t:- | awk -v dir=exp_dnn/orig2/cmp/ '($2 == "["){if (out) close(out); out=dir $1 ".cmp";}($2 != "["){if ($NF == "]") $NF=""; print $0 > out}'
 for cmp in exp_dnn/orig2/cmp/*.cmp; do
-    utils/mlsa_synthesis_63_mlpg.sh --alpha 0.42 --fftlen 512 $cmp exp_dnn/orig2/wav/`basename $cmp .cmp`.wav
+    utils/mlsa_synthesis_63_mlpg.sh --voice_thresh 0.5 --alpha 0.42 --fftlen 512 --srate $srate --bndap_order 21 --mcep_order 39 $cmp exp_dnn/orig2/wav/`basename $cmp .cmp`.wav
 done
 
 # Variant with mlpg: requires mean / variance from coefficients
@@ -407,6 +380,33 @@ copy-feats scp:data/train/feats.scp ark:- \
 (NR==3){if ($NF == "]") NF -= 1; for (i=1; i < NF; i++) var[i] = $i / count - mean[i] * mean[i]; nv = NF-1}
 END{for (i = 1; i <= nv; i++) print mean[i], var[i]}' \
     > data/train/var_cmp.txt
+
+echo "  ###  5b: Alice samples synthesis ###"
+# Alice test set
+mkdir -p data/eval
+cp $KALDI_ROOT/idlak-data/en/testdata/alice.xml data/eval/text.xml
+
+# Generate CEX features for test set.
+for step in eval; do
+    idlaktxp --pretty --tpdb=$tpdb data/$step/text.xml - \
+     | idlakcex --pretty --cex-arch=default --tpdb=$tpdb - data/$step/text_full.xml
+    python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 2 -r "alice" \
+        data/$step/text_full.xml data/full/cex.ark.freq data/$step/cex.ark > data/$step/cex_output_dump
+    # Generate input feature for duration modelling
+    cat data/$step/cex.ark \
+        | awk '{print $1, "["; $1=""; na = split($0, a, ";"); for (i = 1; i < na; i++) for (state = 0; state < 5; state++) print a[i], state; print "]"}' \
+        | copy-feats ark:- ark,scp:$featdir/in_durfeats_$step.ark,$featdir/in_durfeats_$step.scp
+done
+
+# Duration based test set
+for step in eval; do
+    dir=lbldurdata/$step
+    mkdir -p $dir
+    cp $featdir/in_durfeats_$step.scp $dir/feats.scp
+    cut -d ' ' -f 1 $dir/feats.scp | awk -v spk=$spk '{print $1, spk}' > $dir/utt2spk
+    utils/utt2spk_to_spk2utt.pl $dir/utt2spk > $dir/spk2utt
+    steps/compute_cmvn_stats.sh $dir $dir $dir
+done
 
 # Generate label with DNN-generated duration
 echo "Synthesizing MLPG eval samples"
@@ -470,7 +470,20 @@ utils/make_forward_fmllr.sh $dnndir $lbldir/eval $dnndir/tst_forward/ ""
 # 5. Vocoding
 # NB: these are the settings for 16k
 mkdir -p $dnndir/tst_forward/wav_mlpg/; for cmp in $dnndir/tst_forward/cmp/*.cmp; do
-    utils/mlsa_synthesis_63_mlpg.sh --alpha 0.42 --fftlen 512 --srate $srate --bndap_order 21 --mcep_order 39 --delta_order 2 $cmp $dnndir/tst_forward/wav_mlpg/`basename $cmp .cmp`.wav data/train/var_cmp.txt
+    utils/mlsa_synthesis_63_mlpg.sh --voice_thresh 0.5 --alpha 0.42 --fftlen 512 --srate $srate --bndap_order 21 --mcep_order 39 --delta_order 2 $cmp $dnndir/tst_forward/wav_mlpg/`basename $cmp .cmp`.wav data/train/var_cmp.txt
 done
+
+echo "
+*********************
+** Congratulations **
+*********************
+TTS-DNN trained and sample synthesis done.
+
+Samples can be found in $dnndir/tst_forward/wav_mlpg/*.wav.
+
+More synthesis can be performed using the utils/synthesis_test.sh utility,
+e.g.: echo 'Test 1 2 3' | utils/synthesis_test.sh
+"
+
 
 

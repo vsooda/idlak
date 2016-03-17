@@ -35,6 +35,8 @@ class RESD:
 
     ########################################################
     
+    #def rms(self, v):
+        
     # Mixed excitation
     def mixed_excitation(self, _pulse, _noise, bndaps, pitch_period=0.0, voiced=True):
 
@@ -97,6 +99,10 @@ class RESD:
 
         # Mix the excitation
         excitation = pulse + noise
+
+        # Normalise energy
+        excitation /= np.sqrt(pitch_period / sum(excitation ** 2)) 
+        
         
         return excitation, pulse, noise 
     
@@ -167,6 +173,7 @@ class RESD:
                 frame_f0 = self.uvf0
                 pitch_period = float(self.srate) / self.uvf0
                 voiced = False
+                bndap = np.zeros(self.O_bndap)
 
             pitch_period_int = int(pitch_period)
             pulse_magnitude = np.sqrt(pitch_period_int)
@@ -216,7 +223,7 @@ class RESD:
 
     
 
-    # Builds a pitch synchronous hamming filter
+    # Builds a pitch synchronous hanning filter
     def pitch_sync_hann(self, left_period, right_period, hlen = None):
 
         if hlen is None:
@@ -317,6 +324,8 @@ def main():
                       help = 'bndap order')
     parser.add_option('-n','--no-mix', default = False, action="store_true",
                       help = 'Disable mixed excitation')
+    parser.add_option('-G','--gain', default = 1.0,
+                      help = 'Change output gain')
     parser.add_option('-B', '--midbands', default = None, 
                       help = 'comma separated mid points of each band')
                       # kaldi bands = 8,15,22,30,38,47,58,69,81,95,110,127,147,169,194,224,259,301,353,416,498,606,757,980,1344
@@ -365,7 +374,7 @@ def main():
     residual = RESD(opts.fftlen, int(opts.srate), float(opts.fshift), opts)
     excitation = residual.vocode(f0s, bndaps)
     
-    out.write(array.array('f', excitation).tostring())
+    out.write(array.array('f', excitation * float(opts.gain)).tostring())
     
 
 

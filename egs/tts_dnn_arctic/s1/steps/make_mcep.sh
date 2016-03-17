@@ -10,6 +10,7 @@ nj=4
 cmd=run.pl
 mcep_config=conf/mcep.conf
 frame_length=30
+sample_frequency=16000
 compress=false
 # End configuration section.
 
@@ -88,7 +89,7 @@ else
     in_feats="scp,p:$logdir/wav_${name}.JOB.scp"
 fi
 
-mcep_feats="ark,s,cs:compute-mcep-feats.sh --frame_length $frame_length $in_feats ark:- |"
+mcep_feats="ark,s,cs:compute-mcep-feats.sh --frame_length $frame_length --srate $sample_frequency $in_feats ark:- |"
 
 
 $cmd JOB=1:$nj $logdir/make_mcep.JOB.log \
