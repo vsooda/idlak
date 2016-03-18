@@ -146,7 +146,7 @@ fi
 #synthesis_fft -float -f $samp_freq -sigp 1.2 -cornf 1000 -bw 70.0 -delfrac 0.2 -sd 0.5 -mel -bap -order $mcep_order -apfile $bap -alpha $alpha $f0 $mcep $2
 
 if [ "$synth" = "cere" ]; then
-    if [ $voice_thresh -gt 0 ]; then
+    if [ `awk -v vt=$voice_thresh 'BEGIN{if (vt > 0) print 1; else print 0}'` -eq 1 ]; then
         mlopts="-n"
     else
         mlopts="-p"
@@ -162,7 +162,7 @@ elif [ "$synth" = "excitation" ]; then
     #cat $f0 | awk -v srate=$srate '(NR > 2){if ($1 > 0) print srate / $1; else print 0.0}' | x2x +af \
     #    | excite -p $psize \
     python utils/excitation.py -G 0.8 -s $srate -f $fftlen -b $bndap_order $f0 $bap > $tmpdir/resid.float
-    cat $tmpdir/resid.float | mlsadf -m $order -a $alpha -p $psize $mcep.float | x2x -o +fs > $tmpdir/data.mcep.syn
+    cat $tmpdir/resid.float | mlsadf -P 5 -m $order -a $alpha -p $psize $mcep.float | x2x -o +fs > $tmpdir/data.mcep.syn
     sox --norm -t raw -c 1 -r $srate -s -b 16 $tmpdir/data.mcep.syn $out_wav
 else
     x2x +af $mcep > $mcep.float
@@ -170,7 +170,7 @@ else
     # We have to drop the first few F0 frames to match SPTK behaviour
     cat $f0 | awk -v srate=$srate '(NR > 2){if ($1 > 0) print srate / $1; else print 0.0}' | x2x +af \
         | excite -p $psize \
-        | mlsadf -m $order -a $alpha -p $psize $mcep.float | x2x -o +fs > $tmpdir/data.mcep.syn
+        | mlsadf -P 5 -m $order -a $alpha -p $psize $mcep.float | x2x -o +fs > $tmpdir/data.mcep.syn
     sox --norm -t raw -c 1 -r $srate -s -b 16 $tmpdir/data.mcep.syn $out_wav
 fi
 
