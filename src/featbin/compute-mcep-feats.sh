@@ -44,7 +44,7 @@ for i in `awk -v lst="$1" 'BEGIN{if (lst ~ /^scp/) sub("[^:]+:[[:space:]]*","", 
     
     sox $wfilename -t raw - | $tooldir/x2x +sf | $tooldir/frame -l $winlen -p $winstep \
 	| $tooldir/window -l $winlen -L $fftlen \
-	| $tooldir/mcep -f 1e-12 -i 1 -j 10 -l $fftlen -m $order -a $alpha \
+	| $tooldir/mcep -f 1e-12 -i 2 -j 50 -l $fftlen -m $order -a $alpha \
 	| $tooldir/x2x +f +a$mlen \
 	| awk -v name=$name '
 BEGIN{print name, "[";}
