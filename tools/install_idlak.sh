@@ -118,6 +118,32 @@ if [ $ok_sptk -ne 0 ]; then
   exit 1
 fi
 
+echo "****(5) Installing phonetisaurus"
+(
+    rm -f Phonetisaurus
+    git clone https://github.com/AdolfVonKleist/Phonetisaurus.git
+    if [ ! -e Phonetisaurus ]; then
+        echo "****cloning of Phonetisaurus failed."
+	    exit 1
+    else
+        cd Phonetisaurus
+	    git checkout 09651ed5f6e9040d6dd30070601ecccfad254df4 . || exit 1
+        patch -p1 -N < ../extras/phonetisaurus.patch
+        cd src/.autoconf
+        autoconf -o ../configure || exit 1
+        cd ..
+        LDFLAGS="-Wl,-rpath=`pwd`/../../openfst/lib/" ./configure --with-openfst-libs=`pwd`/../../openfst/lib --with-openfst-includes=`pwd`/../../openfst/include  --with-install-bin=`pwd`/.. || exit 1
+	    make -j4 || exit 1
+	    make install || exit 1
+        cd ..
+    fi
+)
+ok_phonetisaurus=$?
+if [ $ok_phonetisaurus -ne 0 ]; then
+    echo "****phonetisaurus install failed."
+    exit 1
+fi
+
 # echo "****(1) Installing Apache Xerces C++ XML Parser"
 
 # (

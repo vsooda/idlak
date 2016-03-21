@@ -3,7 +3,7 @@
 CXX = g++
 # CXX = clang++  # Uncomment this line to build with Clang.
 
-OPENFST_VERSION = 1.3.4
+OPENFST_VERSION = 1.4.1
 # Uncomment the next line to build with OpenFst-1.4.1.
 # OPENFST_VERSION = 1.4.1
 # Note: OpenFst >= 1.4 requires C++11 support, hence you will need to use a
@@ -73,9 +73,9 @@ openfst-$(OPENFST_VERSION)/lib: | openfst-$(OPENFST_VERSION)/Makefile
 # "file too big".
 openfst-$(OPENFST_VERSION)/Makefile: openfst-$(OPENFST_VERSION)/.patched
 ifeq ($(OSTYPE),cygwin)
-	cd openfst-$(OPENFST_VERSION)/; ./configure --prefix=`pwd` --enable-static --disable-shared --enable-far --enable-ngram-fsts CXX=$(CXX) CXXFLAGS="$(CXXFLAGS)" LDFLAGS="$(LDFLAGS)" LIBS="-ldl"
+	cd openfst-$(OPENFST_VERSION)/; ./configure --prefix=`pwd` --enable-static --disable-shared --enable-far --enable-ngram-fsts --enable-lookahead-fsts --enable-const-fsts --enable-pdt --enable-linear-fsts CXX=$(CXX) CXXFLAGS="$(CXXFLAGS)" LDFLAGS="$(LDFLAGS)" LIBS="-ldl"
 else
-	cd openfst-$(OPENFST_VERSION)/; ./configure --prefix=`pwd` --enable-static --enable-shared --enable-far --enable-ngram-fsts CXX=$(CXX) CXXFLAGS="$(CXXFLAGS)" LDFLAGS="$(LDFLAGS)" LIBS="-ldl"
+	cd openfst-$(OPENFST_VERSION)/; ./configure --prefix=`pwd` --enable-static --enable-shared --enable-far --enable-ngram-fsts --enable-lookahead-fsts --enable-const-fsts --enable-pdt --enable-linear-fsts CXX=$(CXX) CXXFLAGS="$(CXXFLAGS)" LDFLAGS="$(LDFLAGS)" LIBS="-ldl"
 endif
 
 # patches for openfst. openfst_gcc41up.patch is a patch for openfst to \
