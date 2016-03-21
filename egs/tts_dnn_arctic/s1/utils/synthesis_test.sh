@@ -74,7 +74,7 @@ utils/make_forward_fmllr.sh $durdnndir $lbldurdir $duroutdir ""
    for (i = 1; i <= nstate; i++) {
         if (sd[i % nstate] > 0) {
            tend = tstart + sd[i % nstate] * 50000;
-           print tstart, tend, int(NR / 5), i-1;
+           print tstart, tend, int(NR / nstate), i-1;
            tstart = tend;
         }
    }
