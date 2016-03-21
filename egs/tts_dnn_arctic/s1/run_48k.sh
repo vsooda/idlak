@@ -378,7 +378,7 @@ elif [ "$srate" == "48000" ]; then
     order=60
     alpha=0.55
     fftlen=4096
-    bndap_order=21
+    bndap_order=25
 fi
 
 echo "##### Step 5: synthesis #####"
@@ -501,7 +501,7 @@ TTS-DNN trained and sample synthesis done.
 Samples can be found in $dnndir/tst_forward/wav_mlpg/*.wav.
 
 More synthesis can be performed using the utils/synthesis_test.sh utility,
-e.g.: echo 'Test 1 2 3' | utils/synthesis_test.sh
+e.g.: echo 'Test 1 2 3' | utils/synthesis_test-48k.sh
 "
 
 

@@ -32,7 +32,7 @@ srate=16000
 FRAMESHIFT=0.005
 TMPDIR=/tmp
 # Clean up
-rm -rf data/train data/eval data/dev data/train_* data/eval_* data/dev_*
+rm -rf data/train data/eval data/dev data/train_* data/eval_* data/dev_* data/full
 
 # Speaker ID
 spks="slt" # can add any of awb, bdl, clb, jmk, ksp, rms
