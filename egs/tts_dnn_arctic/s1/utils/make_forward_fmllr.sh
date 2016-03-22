@@ -25,8 +25,12 @@ if [ -e $exp/cmvn_glob.ark ]; then
     echo "Applying global cmvn on labels"
     infeats_tst="$infeats_tst apply-cmvn --print-args=false --norm-vars=true $exp/cmvn_glob.ark ark:- ark:- |"
 fi
-
-cat $exp/final.feature_transform | convert_transform.sh > $out/reverse_final.feature_transform
+if [ -e $exp/reverse_final.feature_transform ]; then
+    feat_transf=$exp/reverse_final.feature_transform
+else
+    cat $exp/final.feature_transform | convert_transform.sh > $out/reverse_final.feature_transform
+    feat_transf=$out/reverse_final.feature_transform
+fi
 postproc="ark,t:| cat "
 
 # optionally add fmllr transform
@@ -61,6 +65,6 @@ fi
 echo "${infeats_tst}"
 echo "${postproc}"
 
-nnet-forward --reverse-transform=true --no-softmax=true --feature-transform=$out/reverse_final.feature_transform $nnet "${infeats_tst}" "${postproc}"
+nnet-forward --reverse-transform=true --feature-transform=$feat_transf $nnet "${infeats_tst}" "${postproc}"
 
 #for i in $cmpdir/*.cmp; do dnt_tools/straight_synthesis189.sh $i $wavdir/`basename $i .cmp`.wav; done

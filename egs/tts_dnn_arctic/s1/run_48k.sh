@@ -503,6 +503,12 @@ Samples can be found in $dnndir/tst_forward/wav_mlpg/*.wav.
 More synthesis can be performed using the utils/synthesis_test.sh utility,
 e.g.: echo 'Test 1 2 3' | utils/synthesis_test-48k.sh
 "
+echo "#### Step 6: packaging DNN voice ####"
 
+utils/make_dnn_voice.sh --spk $spk --srate $srate --mcep_order $order --bndap_order $bndap_order --alpha $alpha --fftlen $fftlen 
+
+echo "Voice packaged successfully. Portable models have been stored in ${spk}_mdl."
+echo "Synthesis can be performed using: 
+         echo \"This is a demo of D N N synthesis\" | utils/synthesis_voice.sh ${spk}_mdl <outdir>"
 
 

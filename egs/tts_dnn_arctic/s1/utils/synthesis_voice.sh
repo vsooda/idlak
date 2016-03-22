@@ -1,36 +1,28 @@
-# NB: important input files are:
-# data/full/cex.ark.freq (for mapping categorical features to binary)
-# $durdnndir/{input_final.feature_transform,indelta_order,cmvn_glob.ark,tst_forward/reverse_final.feature_transform,norm_vars,cmvn_out_glob.ark}
-# $dnndir/{input_final.feature_transform,indelta_order,cmvn_glob.ark,tst_forward/reverse_final.feature_transform,norm_vars,cmvn_out_glob.ark}
-# tpdb dir
-# data/train/var_cmp.txt
+#!/bin/sh
 
+if [ $# != 2 ]; then
+  echo "Usage: synthesis_voice.sh <voicedir> <outputdir>"
+  echo "This script will perform TTS using the text from STDIN using the DNN voice passed in the first argument. The audio files wil be stored in outputdir."
+  exit 1
+fi
 
-cex_freq=data/full/cex.ark.freq
-var_cmp=data/train/var_cmp.txt
-durdnndir=exp_dnn/tts_dnn_dur_3_delta_quin5/
-dnndir=exp_dnn/tts_dnn_train_3_deltasc2_quin5/
-datadir=data/eval_test
-tpdb=
-tpdbvar=en/ga/
-spk=slt
-srate=16000
-delta_order=2
-mcep_order=39
-bndap_order=21
-voice_thresh=0.5
-alpha=0.42
-fftlen=512
+voice_dir=$1
+outdir=$2
+
+source $voice_dir/voice.conf
+
+cex_freq=$voice_dir/lang/cex.ark.freq
+var_cmp=$voice_dir/lang/var_cmp.txt
+durdnndir=$voice_dir/dur
+dnndir=$voice_dir/acoustic
+datadir=`mktemp -d`
+tpdb=`realpath $voice_dir/lang/$tpdbvar`
 
 [ -f path.sh ] && . ./path.sh; 
-. parse_options.sh || exit 1;
 
-rm -rf $datadir
-mkdir -p $datadir
 awk 'BEGIN{print "<parent>"}{print}END{print "</parent>"}' > $datadir/text.xml
 
 # Generate CEX features for test set.
-tpdb=${tpdb:-$KALDI_ROOT/idlak-data/$tpdbvar}
 idlaktxp --pretty --tpdb=$tpdb $datadir/text.xml - \
     | idlakcex --pretty --cex-arch=default --tpdb=$tpdb - $datadir/text_full.xml
 python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 2 -r "test" \
@@ -51,7 +43,7 @@ utils/utt2spk_to_spk2utt.pl $lbldurdir/utt2spk > $lbldurdir/spk2utt
 # Generate label with DNN-generated duration
 
 #  1. forward pass through duration DNN
-duroutdir=$durdnndir/tst_forward_tmp/
+duroutdir=`mktemp -d`
 rm -rf $duroutdir
 utils/make_forward_fmllr.sh $durdnndir $lbldurdir $duroutdir ""
 #  2. make the duration consistent, generate labels with duration information added
@@ -105,8 +97,8 @@ utils/utt2spk_to_spk2utt.pl $lbldir/utt2spk > $lbldir/spk2utt
 #    steps/compute_cmvn_stats.sh $dir $dir $dir
 
 # 4. Forward pass through big DNN
-outdir=$dnndir/tst_forward_tmp/
-rm -rf $outdir
+#outdir=$dnndir/tst_forward_tmp/
+rm -rf $outdir/*
 utils/make_forward_fmllr.sh $dnndir $lbldir $outdir ""
 
 # 5. Vocoding
