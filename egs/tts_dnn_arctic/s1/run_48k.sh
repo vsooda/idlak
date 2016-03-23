@@ -35,7 +35,7 @@ TMPDIR=/tmp
 rm -rf data/train data/eval data/dev data/train_* data/eval_* data/dev_* data/full
 
 # Speaker ID
-spks="bdl" # can add any of awb, bdl, clb, jmk, ksp, rms
+spks="slt" # can add any of awb, bdl, clb, jmk, ksp, rms
 
 echo "##### Step 0: data preparation #####"
 mkdir -p data/{train,dev}
@@ -50,8 +50,8 @@ for spk in $spks; do
     if [ ! -e $audio_dir ]; then
 	    mkdir -p rawaudio
 	    cd rawaudio
-	    #wget $url
-	    #tar xjf $arch
+	    wget $url
+	    tar xjf $arch
 	    cd ..
         mkdir -p $audio_dir
         for i in rawaudio/cmu_us_${spk}_arctic/orig/*.wav; do
@@ -264,7 +264,7 @@ copy-feats ark:$featdir/in_feats_full.ark ark,t:- \
 function print_phone(vkey, vasd, vpd) {
       for (s = 0; s < nstate; s++) {
          print vkey, s, vasd[s], vpd;
-         asd[s] = 0;
+         vasd[s] = 0;
       }
 }
 (NF == 2){print}
@@ -305,8 +305,10 @@ select-feats $(( $nfeats - 2 ))-$(( $nfeats - 1 )) "$duration_feats" ark,scp:$fe
 for step in train dev; do
     dir=lbldata/$step
     mkdir -p $dir
-    cp data/$step/{utt2spk,spk2utt} $dir
-    utils/filter_scp.pl $dir/utt2spk $featdir/in_feats_full.scp > $dir/feats.scp
+    #cp data/$step/{utt2spk,spk2utt} $dir
+    utils/filter_scp.pl data/$step/utt2spk $featdir/in_feats_full.scp > $dir/feats.scp
+    cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
+    utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
     steps/compute_cmvn_stats.sh $dir $dir $dir
 done
 
@@ -314,17 +316,29 @@ done
 for step in train dev; do
     dir=lbldurdata/$step
     mkdir -p $dir
-    cp data/$step/{utt2spk,spk2utt} $dir
+    #cp data/$step/{utt2spk,spk2utt} $dir
     utils/filter_scp.pl $dir/utt2spk $featdir/in_durfeats_full.scp > $dir/feats.scp
+    cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
+    utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
     steps/compute_cmvn_stats.sh $dir $dir $dir
 
     dir=durdata/$step
     mkdir -p $dir
-    cp data/$step/{utt2spk,spk2utt} $dir
+    #cp data/$step/{utt2spk,spk2utt} $dir
     utils/filter_scp.pl $dir/utt2spk $featdir/out_durfeats_full.scp > $dir/feats.scp
+    cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
+    utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
     steps/compute_cmvn_stats.sh $dir $dir $dir
 done
 
+#ensure consistency in lists
+#for dir in $lbldir $acdir; do
+for class in train dev; do
+    cp $lbldir/$class/feats.scp $lbldir/$class/feats_full.scp
+    cp $acdir/$class/feats.scp $acdir/$class/feats_full.scp
+    cat $acdir/$class/feats_full.scp | awk -v lst=$lbldir/$class/feats_full.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $acdir/$class/feats.scp
+    cat $lbldir/$class/feats_full.scp | awk -v lst=$acdir/$class/feats_full.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $lbldir/$class/feats.scp
+done
 
 ##############################
 ## 4. Train DNN
@@ -352,14 +366,6 @@ $cuda_cmd $expdurdir/_train_nnet.log steps/train_nnet_basic.sh --delta_order 2 -
 
 # B. Larger DNN for acoustic features
 echo " ### Step 4b: acoustic model DNN ###"
-#ensure consistency in lists
-#for dir in $lbldir $acdir; do
-for class in train dev; do
-    cp $lbldir/$class/feats.scp $lbldir/$class/feats_full.scp
-    cp $acdir/$class/feats.scp $acdir/$class/feats_full.scp
-    cat $acdir/$class/feats_full.scp | awk -v lst=$lbldir/$class/feats_full.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $acdir/$class/feats.scp
-    cat $lbldir/$class/feats_full.scp | awk -v lst=$acdir/$class/feats_full.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $lbldir/$class/feats.scp
-done
 
 dnndir=$exp/tts_dnn_train_3_deltasc2_quin5
 rm -rf $dnndir
