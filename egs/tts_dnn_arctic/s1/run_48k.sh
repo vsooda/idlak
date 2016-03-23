@@ -35,7 +35,7 @@ TMPDIR=/tmp
 rm -rf data/train data/eval data/dev data/train_* data/eval_* data/dev_* data/full
 
 # Speaker ID
-spks="slt" # can add any of awb, bdl, clb, jmk, ksp, rms
+spks="slt" # can be any of slt, bdl, jmk
 
 echo "##### Step 0: data preparation #####"
 mkdir -p data/{train,dev}
@@ -174,7 +174,10 @@ for step in train dev full; do
 done
 # Generate language models for alignment
 mkdir -p $dict
+# Create dictionary and text files
 python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 0 data/full/text_norm.xml data/full $dict
+# Fix data directory, in case some recordings are missing
+utils/fix_data_dir.sh data/full
 
 #######################################
 ## 3a: create kaldi forced alignment ##
