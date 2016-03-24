@@ -320,7 +320,7 @@ for step in train dev; do
     dir=lbldurdata/$step
     mkdir -p $dir
     #cp data/$step/{utt2spk,spk2utt} $dir
-    utils/filter_scp.pl $dir/utt2spk $featdir/in_durfeats_full.scp > $dir/feats.scp
+    utils/filter_scp.pl data/$step/utt2spk $featdir/in_durfeats_full.scp > $dir/feats.scp
     cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
     utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
     steps/compute_cmvn_stats.sh $dir $dir $dir
@@ -328,11 +328,14 @@ for step in train dev; do
     dir=durdata/$step
     mkdir -p $dir
     #cp data/$step/{utt2spk,spk2utt} $dir
-    utils/filter_scp.pl $dir/utt2spk $featdir/out_durfeats_full.scp > $dir/feats.scp
+    utils/filter_scp.pl data/$step/utt2spk $featdir/out_durfeats_full.scp > $dir/feats.scp
     cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
     utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
     steps/compute_cmvn_stats.sh $dir $dir $dir
 done
+
+acdir=data
+lbldir=lbldata
 
 #ensure consistency in lists
 #for dir in $lbldir $acdir; do
@@ -350,8 +353,6 @@ done
 echo "##### Step 4: training DNNs #####"
 
 exp=exp_dnn
-acdir=data
-lbldir=lbldata
 mkdir -p $exp
 
 # Very basic one for testing
