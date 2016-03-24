@@ -131,13 +131,13 @@ void AccumulateFullCtxStats(const std::vector< std::vector<int32> > &alignment,
     for (int32 i = 0; i < ctx_size-1 /*last one for pdf-class*/; ++i) {
       int32 feat = (*frame_itr)[i];
       if (is_ctx_dep || i == central_pos)
-        evec.push_back(std::make_pair<EventKeyType, EventValueType>(i, feat));
+          evec.push_back(std::make_pair(static_cast<EventKeyType>(i), static_cast<EventValueType>(feat)));
     }
     // Question about the central phone
     int32 pdf_class = (*frame_itr)[ctx_size-1];
     // pdf_class will normally by 0, 1 or 2 for 3-state HMM.
-    evec.push_back(std::make_pair<EventKeyType, EventValueType>(kPdfClass,
-                                                                pdf_class));
+    std::pair<EventKeyType, EventValueType> pr(kPdfClass, pdf_class);
+    evec.push_back(pr);
     std::sort(evec.begin(), evec.end());  // these must be sorted!
     if (stats->count(evec) == 0)
       (*stats)[evec] = new GaussClusterable(dim, var_floor);
