@@ -112,7 +112,7 @@ int main(int argc, char *argv[]) {
     BuildTreeStatsType stats;
     for (std::map<EventType, GaussClusterable*>::const_iterator iter =
          tree_stats.begin(); iter != tree_stats.end(); ++iter) {
-        stats.push_back(std::make_pair(static_cast<EventType(iter->first)>, static_cast<GaussClusterable*(iter->second)>));
+        stats.push_back(std::make_pair(static_cast<EventType>(iter->first), static_cast<GaussClusterable*>(iter->second)));
     }
     tree_stats.clear();
 
