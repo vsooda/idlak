@@ -39,58 +39,108 @@ lang=data/lang
 dict=data/dict
 expa=exp-align
 train=data/full
+
+#config
+#0 not run; 1 run; 2 run and exit
+DATA_PREP=0
+LANG_PREP=0
+EXTRACT_FEAT=0
+ALIGNMENT=0
+
 # Clean up
 #rm -rf data
-
-# Speaker ID
-spk="lbx" # can be any of slt, bdl, jmk
+spks="lbx"
 audio_dir=$corpus_dir/wav 
 
 echo "##### Step 0: data preparation #####"
-#mkdir -p data/{train,dev}
-#mkdir -p data/full
-#
-#
-#cp $corpus_dir/utt2spk data/full/
-#cp $corpus_dir/text data/full/text
-#
-##find $audio_dir -name "*.wav" | sort  >> data/full/wav.scp
-#for nn in `find $audio_dir/*.wav | sort -u | xargs -i basename {} .wav`; do
-#  echo $nn $audio_dir/$nn.wav >> data/full/wav.scp
-#done
-#
-#utils/utt2spk_to_spk2utt.pl data/full/utt2spk > data/full/spk2utt
-#
-#
+if [ $DATA_PREP -gt 0 ]; then
+    rm -rf data/{train,dev,full}
+    mkdir -p data/{train,dev}
+    mkdir -p data/full
+
+    for x in train dev; do
+        for nn in `find $corpus_dir/$x/wav/*.wav | sort -u | xargs -i basename {} .wav`; do
+          echo $nn $corpus_dir/$x/wav/$nn.wav >> data/$x/wav.scp
+        done
+        cp $corpus_dir/$x/utt2spk data/$x/
+        cp $corpus_dir/$x/text data/$x/
+        utils/utt2spk_to_spk2utt.pl data/$x/utt2spk > data/$x/spk2utt
+    done
+    cat data/train/utt2spk data/dev/utt2spk > data/full/utt2spk
+    cat data/train/text data/dev/text > data/full/text
+    cat data/train/wav.scp data/dev/wav.scp > data/full/wav.scp
+    utils/utt2spk_to_spk2utt.pl data/full/utt2spk > data/full/spk2utt
+    if [ $DATA_PREP -eq 2 ]; then
+        echo "exit in data prepare"
+        exit
+    fi
+fi
+
+
+echo "##### Step 1: prepare language #####"
+if [ $LANG_PREP -gt 0 ]; then
+  cd $H; mkdir -p data/{dict,lang,graph} && \
+  cp $thchs/resource/dict/{extra_questions.txt,nonsilence_phones.txt,optional_silence.txt,silence_phones.txt} data/dict && \
+  cat $thchs/resource/dict/lexicon.txt $thchs/data_thchs30/lm_word/lexicon.txt | \
+  	grep -v '<s>' | grep -v '</s>' | sort -u > data/dict/lexicon.txt || exit 1;
+  utils/prepare_lang.sh --position_dependent_phones false data/dict "<SPOKEN_NOISE>" data/local/lang data/lang || exit 1;
+  gzip -c $thchs/data_thchs30/lm_word/word.3gram.lm > data/graph/word.3gram.lm.gz || exit 1;
+  utils/format_lm.sh data/lang data/graph/word.3gram.lm.gz $thchs/data_thchs30/lm_word/lexicon.txt data/graph/lang || exit 1;
+fi
+
 #############################################
 ###### Step 1: acoustic data generation #####
 #############################################
-#
-#echo "##### Step 1: acoustic data generation #####"
-#
-## Use kaldi to generate MFCC features for alignment
-for step in full; do
-  steps/make_mfcc.sh data/$step exp/make_mfcc/$step $featdir
-  steps/compute_cmvn_stats.sh data/$step exp/make_mfcc/$step $featdir
-done
-#
-#
-#
-#############################################
-######      Step 2: label creation      #####
-#############################################
-#
-#echo "##### Step 2: label creation #####"
-#(
-#  cd $H; mkdir -p data/{dict,lang,graph} && \
-#  cp $thchs/resource/dict/{extra_questions.txt,nonsilence_phones.txt,optional_silence.txt,silence_phones.txt} data/dict && \
-#  cat $thchs/resource/dict/lexicon.txt $thchs/data_thchs30/lm_word/lexicon.txt | \
-#  	grep -v '<s>' | grep -v '</s>' | sort -u > data/dict/lexicon.txt || exit 1;
-#  utils/prepare_lang.sh --position_dependent_phones false data/dict "<SPOKEN_NOISE>" data/local/lang data/lang || exit 1;
-#  gzip -c $thchs/data_thchs30/lm_word/word.3gram.lm > data/graph/word.3gram.lm.gz || exit 1;
-#  utils/format_lm.sh data/lang data/graph/word.3gram.lm.gz $thchs/data_thchs30/lm_word/lexicon.txt data/graph/lang || exit 1;
-#)
-#
+echo "##### Step 1: acoustic data generation #####"
+
+if [ $EXTRACT_FEAT -gt 0 ]; then
+
+    for step in train dev; do
+        rm -f data/$step/feats.scp
+        # Generate f0 features
+        steps/make_pitch.sh --pitch-config conf/pitch.conf data/$step exp/make_pitch/$step   $featdir;
+        cp data/$step/pitch_feats.scp data/$step/feats.scp
+        # Compute CMVN on pitch features, to estimate min_f0 (set as mean_f0 - 2*std_F0)
+        steps/compute_cmvn_stats.sh data/$step exp/compute_cmvn_pitch/$step $featdir;
+        # For bndap / mcep extraction to be successful, the frame-length must be adjusted
+        # in relation to the minimum pitch frequency.
+        # We therefore do something speaker specific using the mean / std deviation from
+        # the pitch for each speaker.
+        for spk in $spks; do
+            min_f0=`copy-feats scp:"awk -v spk=$spk '(\\$1 == spk){print}' data/$step/cmvn.scp |" ark,t:- \
+            | awk '(NR == 2){n = \$NF; m = \$2 / n}(NR == 3){std = sqrt(\$2/n - m * m)}END{print m - 2*std}'`
+            echo $min_f0
+            # Rule of thumb recipe; probably try with other window sizes?
+            bndapflen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 4.6 * 1000.0 / f0 + 0.5}'`
+            mcepflen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 2.3 * 1000.0 / f0 + 0.5}'`
+            f0flen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 2.3 * 1000.0 / f0 + 0.5}'`
+            echo "using wsizes: $bndapflen $mcepflen"
+            subset_data_dir.sh --spk $spk data/$step 100000 data/${step}_$spk
+            #cp data/$step/pitch_feats.scp data/${step}_$spk/
+            # Regenerate pitch with more appropriate window
+            steps/make_pitch.sh --pitch-config conf/pitch.conf --frame_length $f0flen data/${step}_$spk exp/make_pitch/${step}_$spk  $featdir;
+            # Generate Band Aperiodicity feature
+            steps/make_bndap.sh --bndap-config conf/bndap.conf --frame_length $bndapflen data/${step}_$spk exp/make_bndap/${step}_$spk  $featdir
+            # Generate Mel Cepstral features
+            #steps/make_mcep.sh  --sample-frequency $srate --frame_length $mcepflen  data/${step}_$spk exp/make_mcep/${step}_$spk   $featdir	
+            steps/make_mcep.sh --sample-frequency $srate data/${step}_$spk exp/make_mcep/${step}_$spk   $featdir	
+        done
+        # Merge features
+        cat data/${step}_*/bndap_feats.scp > data/$step/bndap_feats.scp
+        cat data/${step}_*/mcep_feats.scp > data/$step/mcep_feats.scp
+        # Have to set the length tolerance to 1, as mcep files are a bit longer than the others for some reason
+        paste-feats --length-tolerance=1 scp:data/$step/pitch_feats.scp scp:data/$step/mcep_feats.scp scp:data/$step/bndap_feats.scp ark,scp:$featdir/${step}_cmp_feats.ark,data/$step/feats.scp
+        # Compute CMVN on whole feature set
+        steps/compute_cmvn_stats.sh data/$step exp/compute_cmvn/$step   data/$step
+    done
+
+    if [ $EXTRACT_FEAT -eq 2 ]; then
+        echo "exit in extract feature"
+        exit
+    fi
+fi
+
+
 #######################################
 ## 3a: create kaldi forced alignment ##
 #######################################
@@ -99,78 +149,78 @@ echo "##### Step 3: forced alignment #####"
 utils/fix_data_dir.sh data/full
 utils/validate_lang.pl $lang
 
-# Now running the normal kaldi recipe for forced alignment
-#test=data/eval_mfcc
 
-#steps/train_mono.sh  --nj 1 --cmd "$train_cmd" \
-#  $train $lang $expa/mono
-#steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
-#$train $lang $expa/mono $expa/mono_ali
-#steps/train_deltas.sh --cmd "$train_cmd" \
-#     5000 50000 $train $lang $expa/mono_ali $expa/tri1
-#
-#steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
-#$train data/lang $expa/tri1 $expa/tri1_ali
-#steps/train_deltas.sh --cmd "$train_cmd" \
-#     5000 50000 $train $lang $expa/tri1_ali $expa/tri2
-#
-## Create alignments
-#steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
-#    $train $lang $expa/tri2 $expa/tri2_ali_full
-#
-#steps/train_deltas.sh --cmd "$train_cmd" \
-#    --context-opts "--context-width=5 --central-position=2" \
-#    5000 50000 $train $lang $expa/tri2_ali_full $expa/quin
+if [ $ALIGNMENT -gt 0 ]; then
+    rm -rf exp exp-align
+    for step in full; do
+      steps/make_mfcc.sh data/$step exp/make_mfcc/$step $featdir
+      steps/compute_cmvn_stats.sh data/$step exp/make_mfcc/$step $featdir
+    done
+    # Now running the normal kaldi recipe for forced alignment
+    test=data/eval_mfcc
+    steps/train_mono.sh  --nj 1 --cmd "$train_cmd" \
+                  $train $lang $expa/mono
+    steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
+                $train $lang $expa/mono $expa/mono_ali
+    steps/train_deltas.sh --cmd "$train_cmd" \
+                 5000 50000 $train $lang $expa/mono_ali $expa/tri1
 
-## Create alignments
-#steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
-#  $train $lang $expa/quin $expa/quin_ali_full
+    steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
+                $train data/lang $expa/tri1 $expa/tri1_ali
+    steps/train_deltas.sh --cmd "$train_cmd" \
+                 5000 50000 $train $lang $expa/tri1_ali $expa/tri2
 
+    # Create alignments
+    steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
+        $train $lang $expa/tri2 $expa/tri2_ali_full
 
-################################
-## 3b. Align with full labels ##
-################################
+    steps/train_deltas.sh --cmd "$train_cmd" \
+        --context-opts "--context-width=5 --central-position=2" \
+        5000 50000 $train $lang $expa/tri2_ali_full $expa/quin
 
-# Convert to phone-state alignement
-for step in full; do
-  ali=$expa/quin_ali_$step
-  # Extract phone alignment
-  ali-to-phones --per-frame $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:- \
-  | utils/int2sym.pl -f 2- $lang/phones.txt > $ali/phones.txt
-  # Extract state alignment
-  ali-to-hmmstate $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:$ali/states.tra
-  # Extract word alignment
-  linear-to-nbest ark:"gunzip -c $ali/ali.*.gz|" \
-  ark:"utils/sym2int.pl --map-oov 1669 -f 2- $lang/words.txt < data/$step/text |" '' '' ark:- \
-  | lattice-align-words-lexicon $lang/phones/align_lexicon.int $ali/final.mdl ark:- ark:-  \
-  | nbest-to-ctm --frame-shift=$FRAMESHIFT --precision=3 ark:- - \
-  | utils/int2sym.pl -f 5 $lang/words.txt > $ali/wrdalign.dat
+    # Create alignments
+    steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
+      $train $lang $expa/quin $expa/quin_ali_full
 
-  #ark:"utils/sym2int.pl --map-oov 1669 -f 2- $lang/words.txt < data/$step/text |" '' '' ark:- \
-  #| lattice-align-words $lang/phones/word_boundary.int $ali/final.mdl ark:- ark:- \
-  #| nbest-to-ctm --frame-shift=$FRAMESHIFT --precision=3 ark:- - \
-  #| utils/int2sym.pl -f 5 $lang/words.txt > $ali/wrdalign.dat
+    # Convert to phone-state alignement
+    for step in full; do
+      ali=$expa/quin_ali_$step
+      # Extract phone alignment
+      ali-to-phones --per-frame $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:- \
+      | utils/int2sym.pl -f 2- $lang/phones.txt > $ali/phones.txt
+      # Extract state alignment
+      ali-to-hmmstate $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:$ali/states.tra
+      # Extract word alignment
+      linear-to-nbest ark:"gunzip -c $ali/ali.*.gz|" \
+      ark:"utils/sym2int.pl --map-oov 1669 -f 2- $lang/words.txt < data/$step/text |" '' '' ark:- \
+      | lattice-align-words-lexicon $lang/phones/align_lexicon.int $ali/final.mdl ark:- ark:-  \
+      | nbest-to-ctm --frame-shift=$FRAMESHIFT --precision=3 ark:- - \
+      | utils/int2sym.pl -f 5 $lang/words.txt > $ali/wrdalign.dat
+    done
 
-  exit 1;
+    if [ $ALIGNMENT -eq 2 ]; then
+        echo "exit after alignment"
+        exit
+    fi
+fi
 
-  python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 1 "2:0.03,3:0.2" "4" $ali/phones.txt $ali/wrdalign.dat data/$step/text_align.xml
+cat $expa/quin_ali_full/phones.txt | awk -v frameshift=$FRAMESHIFT ' {print $1, "+++++++";
+    lasttime = 0;
+    lasttoken="";
+    currenttime=0;}
+{
+for(i=2;i<NF;i++) {
+    currenttime = currenttime + frameshift;
+    if (lasttoken != "" && lasttoken != $i) {
+        print lasttoken, lasttime, currenttime
+        lasttime = currenttime
+    }
+    lasttoken = $i; 
+}
+print lasttoken, lasttime, currenttime
+}' > $expa/label.txt
 
-  # Generate corresponding quinphone full labels
-  idlaktxp --pretty --tpdb=$tpdb data/$step/text_align.xml data/$step/text_anorm.xml
-  idlakcex --pretty --cex-arch=default --tpdb=$tpdb data/$step/text_anorm.xml data/$step/text_afull.xml
-  python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 2 data/$step/text_afull.xml data/$step/cex.ark > data/$step/cex_output_dump
-
-  # Merge alignment with output from idlak cex front-end => gives you a nice vector
-  # NB: for triphone alignment:
-  # make-fullctx-ali-dnn  --phone-context=3 --mid-context=1 --max-sil-phone=15 $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:data/$step/cex.ark ark,t:data/$step/ali
-  make-fullctx-ali-dnn --max-sil-phone=15 $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:data/$step/cex.ark ark,t:data/$step/ali
-
-
-  # UGLY convert alignment to features
-  cat data/$step/ali \
-  | awk '{print $1, "["; $1=""; na = split($0, a, ";"); for (i = 1; i < na; i++) print a[i]; print "]"}' \
-  | copy-feats ark:- ark,scp:$featdir/in_feats_$step.ark,$featdir/in_feats_$step.scp
-done
+exit 1
 
 # HACKY
 # Generate features for duration modelling
