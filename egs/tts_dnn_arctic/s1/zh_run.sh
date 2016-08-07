@@ -50,6 +50,8 @@ LANG_PREP_PHONE=0
 EXTRACT_FEAT=0
 ALIGNMENT_WORD=0
 ALIGNMENT_PHONE=0
+GENERATE_LABLE=0
+CONVERT_FEATURE=2
 
 # Clean up
 #rm -rf data
@@ -85,10 +87,10 @@ fi
 echo "##### Step 1: prepare language #####"
 if [ $LANG_PREP_WORD -gt 0 ]; then
   cd $H; mkdir -p data/{dict,lang,graph} && \
-  cp $thchs/resource/dict/{extra_questions.txt,nonsilence_phones.txt,optional_silence.txt,silence_phones.txt} data/dict && \
+  cp $thchs/resource/dict/{extra_questions.txt,nonsilence_phones.txt,optional_silence.txt,silence_phones.txt} $dict && \
   cat $thchs/resource/dict/lexicon.txt $thchs/data_thchs30/lm_word/lexicon.txt | \
-  	grep -v '<s>' | grep -v '</s>' | sort -u > data/dict/lexicon.txt || exit 1;
-  utils/prepare_lang.sh --position_dependent_phones false data/dict "<SPOKEN_NOISE>" data/local/lang data/lang || exit 1;
+  	grep -v '<s>' | grep -v '</s>' | sort -u > $dict/lexicon.txt || exit 1;
+  utils/prepare_lang.sh --position_dependent_phones false $dict "<SPOKEN_NOISE>" data/local/lang data/lang || exit 1;
   gzip -c $thchs/data_thchs30/lm_word/word.3gram.lm > data/graph/word.3gram.lm.gz || exit 1;
   utils/format_lm.sh data/lang data/graph/word.3gram.lm.gz $thchs/data_thchs30/lm_word/lexicon.txt data/graph/lang || exit 1;
 fi
@@ -96,14 +98,18 @@ fi
 
 echo "make phone graph ..."
 if [ $LANG_PREP_PHONE -gt 0 ]; then
+  rm -rf $dict $lang
   cd $H; mkdir -p data/{dict_phone,graph_phone,lang_phone} && \
-  cp $thchs/resource/dict/{extra_questions.txt,nonsilence_phones.txt,optional_silence.txt,silence_phones.txt} data/dict_phone  && \
-  cat $thchs/data_thchs30/lm_phone/lexicon.txt | grep -v '<eps>' | sort -u > data/dict_phone/lexicon.txt  && \
-  echo "<SPOKEN_NOISE> sil " >> data/dict_phone/lexicon.txt  || exit 1;
-  utils/prepare_lang.sh --position_dependent_phones false data/dict_phone "<SPOKEN_NOISE>" data/local/lang_phone data/lang_phone || exit 1;
-  gzip -c $thchs/data_thchs30/lm_phone/phone.3gram.lm > data/graph_phone/phone.3gram.lm.gz  || exit 1;
-  utils/format_lm.sh data/lang_phone data/graph_phone/phone.3gram.lm.gz $thchs/data_thchs30/lm_phone/lexicon.txt \
-    data/graph_phone/lang  || exit 1;
+  # to prepare dict for a new phoneset is quite simple
+  cp $thchs/resource/dict/{extra_questions.txt,nonsilence_phones.txt,optional_silence.txt,silence_phones.txt} $dict  && \
+  cat $thchs/data_thchs30/lm_phone/lexicon.txt | grep -v '<eps>' | sort -u > $dict/lexicon.txt  && \
+  #echo "<SPOKEN_NOISE> sil " >> $dict/lexicon.txt  || exit 1;
+  echo "<SIL> sil " >> $dict/lexicon.txt  || exit 1;
+  utils/prepare_lang.sh --position_dependent_phones false $dict "<SIL>" data/local/lang_phone data/lang_phone || exit 1;
+  # the follow make language model is not need in tts
+  #gzip -c $thchs/data_thchs30/lm_phone/phone.3gram.lm > data/graph_phone/phone.3gram.lm.gz  || exit 1;
+  #utils/format_lm.sh data/lang_phone data/graph_phone/phone.3gram.lm.gz $thchs/data_thchs30/lm_phone/lexicon.txt \
+  #  data/graph_phone/lang  || exit 1;
 fi
 
 #############################################
@@ -233,7 +239,7 @@ if [ $ALIGNMENT_PHONE -gt 0 ]; then
     test=data/eval_mfcc
     steps/train_mono.sh  --nj 1 --cmd "$train_cmd" \
                   $train $lang $expa/mono
-    steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
+    steps/align_si.sh  --boost-silence 0.7 --nj 1 --cmd "$train_cmd" \
                 $train $lang $expa/mono $expa/mono_ali
     steps/train_deltas.sh --cmd "$train_cmd" \
                  5000 50000 $train $lang $expa/mono_ali $expa/tri1
@@ -260,31 +266,54 @@ if [ $ALIGNMENT_PHONE -gt 0 ]; then
     ali-to-phones --per-frame $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:- \
       | utils/int2sym.pl -f 2- $lang/phones.txt > $ali/phones.txt
 
+    ali-to-hmmstate $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:$ali/states.tra
+
     if [ $ALIGNMENT_PHONE -eq 2 ]; then
         echo "exit after phone alignment"
         exit
     fi
 fi
 
-rm labels/*
-cat $expa/quin_ali_full/phones.txt | awk -v frameshift=$FRAMESHIFT ' {
-    lasttime = 0;
-    lasttoken="";
-    currenttime=0;}
-{
-outfile = "labels/"$1".lab";
-for(i=2;i<NF;i++) {
-    currenttime = currenttime + frameshift;
-    if (lasttoken != "" && lasttoken != $i) {
-        print lasttoken, lasttime, currenttime >> outfile
-        lasttime = currenttime
+if [ $GENERATE_LABLE -gt 0 ]; then
+    rm labels/*
+    cat $expa/quin_ali_full/phones.txt | awk -v frameshift=$FRAMESHIFT ' {
+        lasttime = 0;
+        lasttoken="";
+        currenttime=0;}
+    {
+    outfile = "labels/"$1".lab";
+    for(i=2;i<NF;i++) {
+        currenttime = currenttime + frameshift;
+        if (lasttoken != "" && lasttoken != $i) {
+            print lasttoken, lasttime, currenttime >> outfile
+            lasttime = currenttime
+        }
+        lasttoken = $i; 
     }
-    lasttoken = $i; 
-}
-print lasttoken, lasttime, currenttime >> outfile
-}' > $expa/label.txt
+    print lasttoken, lasttime, currenttime >> outfile
+    }'
 
-exit 1
+    #todo: state frame counter
+
+    if [ $GENERATE_LABLE -eq 2 ]; then
+        echo "exit after phone alignment"
+        exit
+    fi
+fi
+
+if [ $CONVERT_FEATURE -gt 0 ]; then
+  step=test1
+  cat data/001.feat \
+  | awk '{print $1, "["; $1=""; na = split($0, a, ";"); for (i = 1; i < na; i++) print a[i]; print "]"}' \
+  | copy-feats ark:- ark,t,scp:$featdir/in_feats_$step.ark,$featdir/in_feats_$step.scp
+
+    if [ $CONVERT_FEATURE -eq 2 ]; then
+        echo "exit after phone alignment"
+        exit
+    fi
+fi
+
+# get outside 
 
 # HACKY
 # Generate features for duration modelling
