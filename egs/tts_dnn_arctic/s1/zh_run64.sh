@@ -81,12 +81,12 @@ fi
 
 echo "make ph64"
 if [ $LANG_PREP_PHONE64 -gt 0 ]; then
-  rm -rf $dict $lang
+  rm -rf $dict $lang data/local/lang_phone
   cd $H; mkdir -p $dict $lang && \
   cp $corpus_dir/dict/{extra_questions.txt,nonsilence_phones.txt,optional_silence.txt,silence_phones.txt} $dict  && \
   cat $corpus_dir/dict/lexicon.txt | grep -v '<eps>' | sort -u > $dict/lexicon.txt  && \
   echo "<SIL> sil " >> $dict/lexicon.txt  || exit 1;
-  utils/prepare_lang.sh --num-nonsil-states 5 --position_dependent_phones false $dict "<SIL>" data/local/lang_phone data/lang_phone || exit 1;
+  utils/prepare_lang.sh --num-nonsil-states 5 --share-silence-phones true --position_dependent_phones false $dict "<SIL>" data/local/lang_phone $lang || exit 1;
 fi
 
 #############################################
@@ -164,12 +164,12 @@ if [ $ALIGNMENT_WORD -gt 0 ]; then
     steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
                 $train $lang $expa/mono $expa/mono_ali
     steps/train_deltas.sh --cmd "$train_cmd" \
-                 5000 50000 $train $lang $expa/mono_ali $expa/tri1
+                 500 5000 $train $lang $expa/mono_ali $expa/tri1
 
     steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
                 $train $lang $expa/tri1 $expa/tri1_ali
     steps/train_deltas.sh --cmd "$train_cmd" \
-                 5000 50000 $train $lang $expa/tri1_ali $expa/tri2
+                 500 5000 $train $lang $expa/tri1_ali $expa/tri2
 
     # Create alignments
     steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
@@ -177,7 +177,7 @@ if [ $ALIGNMENT_WORD -gt 0 ]; then
 
     steps/train_deltas.sh --cmd "$train_cmd" \
         --context-opts "--context-width=5 --central-position=2" \
-        5000 50000 $train $lang $expa/tri2_ali_full $expa/quin
+        500 5000 $train $lang $expa/tri2_ali_full $expa/quin
 
     # Create alignments
     steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
@@ -214,17 +214,17 @@ if [ $ALIGNMENT_PHONE -gt 0 ]; then
     done
     # Now running the normal kaldi recipe for forced alignment
     test=data/eval_mfcc
-    steps/train_mono.sh  --nj 1 --cmd "$train_cmd" \
+    steps/train_mono.sh --boost-silence 0.25 --nj 1 --cmd "$train_cmd" \
                   $train $lang $expa/mono
-    steps/align_si.sh  --boost-silence 0.7 --nj 1 --cmd "$train_cmd" \
+    steps/align_si.sh --boost-silence 0.25 --nj 1 --cmd "$train_cmd" \
                 $train $lang $expa/mono $expa/mono_ali
-    steps/train_deltas.sh --cmd "$train_cmd" \
-                 5000 50000 $train $lang $expa/mono_ali $expa/tri1
+    steps/train_deltas.sh  --boost-silence 0.25 --cmd "$train_cmd" \
+                 500 5000 $train $lang $expa/mono_ali $expa/tri1
 
     steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
                 $train $lang $expa/tri1 $expa/tri1_ali
     steps/train_deltas.sh --cmd "$train_cmd" \
-                 5000 50000 $train $lang $expa/tri1_ali $expa/tri2
+                 500 5000 $train $lang $expa/tri1_ali $expa/tri2
 
     # Create alignments
     steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
@@ -232,7 +232,7 @@ if [ $ALIGNMENT_PHONE -gt 0 ]; then
 
     steps/train_deltas.sh --cmd "$train_cmd" \
         --context-opts "--context-width=5 --central-position=2" \
-        5000 50000 $train $lang $expa/tri2_ali_full $expa/quin
+        500 5000 $train $lang $expa/tri2_ali_full $expa/quin
 
     # Create alignments
     steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
