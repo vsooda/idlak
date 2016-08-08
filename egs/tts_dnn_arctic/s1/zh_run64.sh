@@ -16,15 +16,16 @@ dict=data/dict_phone
 
 #config
 #0 not run; 1 run; 2 run and exit
-DATA_PREP=1
+DATA_PREP=0
 LANG_PREP_WORD=0
 LANG_PREP_PHONE228=0
-LANG_PREP_PHONE64=1
+LANG_PREP_PHONE64=0
 EXTRACT_FEAT=0
 ALIGNMENT_WORD=0
-ALIGNMENT_PHONE=1
+ALIGNMENT_PHONE=0
 GENERATE_LABLE=1
-CONVERT_FEATURE=2
+GENERATE_STATE=2
+CONVERT_FEATURE=0
 
 # Clean up
 #rm -rf data
@@ -253,27 +254,58 @@ fi
 
 if [ $GENERATE_LABLE -gt 0 ]; then
     rm labels/*
-    cat $expa/quin_ali_full/phones.txt | awk -v frameshift=$FRAMESHIFT ' {
+    cat $expa/quin_ali_full/phones.txt | awk -v frameshift=$FRAMESHIFT '
+    {
         lasttime = 0;
         lasttoken="";
-        currenttime=0;}
-    {
-    outfile = "labels/"$1".lab";
-    for(i=2;i<NF;i++) {
-        currenttime = currenttime + frameshift;
-        if (lasttoken != "" && lasttoken != $i) {
-            print lasttoken, lasttime, currenttime >> outfile
-            lasttime = currenttime
-        }
-        lasttoken = $i; 
+        currenttime=0;
     }
-    print lasttoken, lasttime, currenttime >> outfile
+    {
+        outfile = "labels/"$1".lab";
+        for(i=2;i<=NF;i++) {
+            currenttime = currenttime + frameshift;
+            if (lasttoken != "" && lasttoken != $i) {
+                print lasttoken, lasttime, currenttime >> outfile
+                lasttime = currenttime
+            }
+            lasttoken = $i; 
+        }
+        print lasttoken, lasttime, currenttime >> outfile
     }'
 
     #todo: state frame counter
 
     if [ $GENERATE_LABLE -eq 2 ]; then
         echo "exit after phone alignment"
+        exit
+    fi
+fi
+
+if [ $GENERATE_STATE -gt 0 ]; then
+    mkdir -p states
+    rm states/*
+    cat $expa/quin_ali_full/states.tra | awk -v STATE=5 '
+    {
+        laststate = -1;
+        counter = 0;
+    }
+    {
+        outfile = "states/"$1".sta";
+        for(i=2;i<=NF;i++) {
+            if (laststate != $i && laststate != -1) {
+                printf "%d %d ", laststate, counter > outfile
+                if ($i == "0") printf("\n") >> outfile
+                counter = 0
+            }
+            counter = counter + 1
+            laststate = $i
+        }
+        printf "%d %d ", laststate, counter > outfile
+
+    }'
+
+    if [ $GENERATE_STATE -eq 2 ]; then
+        echo "exit after state alignment"
         exit
     fi
 fi
