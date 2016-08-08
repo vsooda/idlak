@@ -6,7 +6,7 @@ thchs=/home/sooda/data/thchs30-openslr
 srate=16000
 FRAMESHIFT=0.005
 featdir=/home/sooda/features
-corpus_dir=/home/sooda/data/labixx_kaldi64
+corpus_dir=/home/sooda/data/kaldi64
 #lang=data/lang
 #dict=data/dict
 expa=exp-align
@@ -17,19 +17,20 @@ dict=data/dict_phone
 #config
 #0 not run; 1 run; 2 run and exit
 DATA_PREP=0
+DATA_PREP_MARY=1
 LANG_PREP_WORD=0
 LANG_PREP_PHONE228=0
-LANG_PREP_PHONE64=0
-EXTRACT_FEAT=0
+LANG_PREP_PHONE64=1
+EXTRACT_FEAT=1
 ALIGNMENT_WORD=0
-ALIGNMENT_PHONE=0
+ALIGNMENT_PHONE=1
 GENERATE_LABLE=1
-GENERATE_STATE=2
-CONVERT_FEATURE=0
+GENERATE_STATE=1
+CONVERT_FEATURE=1
 
 # Clean up
 #rm -rf data
-spks="lbx"
+spk="lbx"
 audio_dir=$corpus_dir/wav 
 
 echo "##### Step 0: data preparation #####"
@@ -49,13 +50,49 @@ if [ $DATA_PREP -gt 0 ]; then
     done
     cat data/train/utt2spk data/dev/utt2spk > data/full/utt2spk
     cat data/train/text data/dev/text > data/full/text
-    cat data/train/wav.scp data/dev/wav.scp > data/full/wav.scp
+    cat data/train/wav.scp data/dev/wav.scp | sort  > data/full/wav.scp
     utils/utt2spk_to_spk2utt.pl data/full/utt2spk > data/full/spk2utt
     if [ $DATA_PREP -eq 2 ]; then
         echo "exit in data prepare"
         exit
     fi
 fi
+
+echo "##### Step 0: data preparation #####"
+if [ $DATA_PREP_MARY -gt 0 ]; then
+    #rm -rf data/{train,dev,full}
+    rm -rf data/*
+    mkdir -p data/{train,dev}
+    mkdir -p data/full
+
+    dev_pat='hs_zh_arctic_lbx_00??2'
+    dev_rgx='hs_zh_arctic_lbx_00..2'
+    train_pat='hs_zh_arctic_lbx_?????'
+    train_rgx='hs_zh_arctic_lbx_.....'
+
+    makeid="xargs -i basename {} .wav"
+
+    find $audio_dir -iname "$train_pat".wav | sort | $makeid | awk -v audiodir=$audio_dir '{line=$1" "audiodir"/"$1".wav"; print line}' >> data/train/wav.scp
+
+    find $audio_dir -iname "$dev_pat".wav | sort | $makeid | awk -v audiodir=$audio_dir '{line=$1" "audiodir"/"$1".wav"; print line}' >> data/dev/wav.scp
+
+    grep "$train_rgx" $corpus_dir/phones.txt | sort >> data/train/text
+    grep "$dev_rgx" $corpus_dir/phones.txt | sort >> data/dev/text
+
+    for x in train dev; do
+        cat data/$x/wav.scp | awk -v spk=$spk '{print $1, spk}' >> data/$x/utt2spk
+        utils/utt2spk_to_spk2utt.pl data/$x/utt2spk > data/$x/spk2utt
+    done
+    cat data/train/utt2spk data/dev/utt2spk | sort -u  > data/full/utt2spk
+    cat data/train/text data/dev/text | sort -u > data/full/text
+    cat data/train/wav.scp data/dev/wav.scp | sort -u > data/full/wav.scp
+    utils/utt2spk_to_spk2utt.pl data/full/utt2spk | sort -u > data/full/spk2utt
+    if [ $DATA_PREP_MARY -eq 2 ]; then
+        echo "exit in data prepare"
+        exit
+    fi
+fi
+
 
 
 echo "##### Step 1: prepare language #####"
@@ -108,25 +145,23 @@ if [ $EXTRACT_FEAT -gt 0 ]; then
         # in relation to the minimum pitch frequency.
         # We therefore do something speaker specific using the mean / std deviation from
         # the pitch for each speaker.
-        for spk in $spks; do
-            min_f0=`copy-feats scp:"awk -v spk=$spk '(\\$1 == spk){print}' data/$step/cmvn.scp |" ark,t:- \
-            | awk '(NR == 2){n = \$NF; m = \$2 / n}(NR == 3){std = sqrt(\$2/n - m * m)}END{print m - 2*std}'`
-            echo $min_f0
-            # Rule of thumb recipe; probably try with other window sizes?
-            bndapflen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 4.6 * 1000.0 / f0 + 0.5}'`
-            mcepflen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 2.3 * 1000.0 / f0 + 0.5}'`
-            f0flen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 2.3 * 1000.0 / f0 + 0.5}'`
-            echo "using wsizes: $bndapflen $mcepflen"
-            subset_data_dir.sh --spk $spk data/$step 100000 data/${step}_$spk
-            #cp data/$step/pitch_feats.scp data/${step}_$spk/
-            # Regenerate pitch with more appropriate window
-            steps/make_pitch.sh --pitch-config conf/pitch.conf --frame_length $f0flen data/${step}_$spk exp/make_pitch/${step}_$spk  $featdir;
-            # Generate Band Aperiodicity feature
-            steps/make_bndap.sh --bndap-config conf/bndap.conf --frame_length $bndapflen data/${step}_$spk exp/make_bndap/${step}_$spk  $featdir
-            # Generate Mel Cepstral features
-            #steps/make_mcep.sh  --sample-frequency $srate --frame_length $mcepflen  data/${step}_$spk exp/make_mcep/${step}_$spk   $featdir	
-            steps/make_mcep.sh --sample-frequency $srate data/${step}_$spk exp/make_mcep/${step}_$spk   $featdir	
-        done
+        min_f0=`copy-feats scp:"awk -v spk=$spk '(\\$1 == spk){print}' data/$step/cmvn.scp |" ark,t:- \
+        | awk '(NR == 2){n = \$NF; m = \$2 / n}(NR == 3){std = sqrt(\$2/n - m * m)}END{print m - 2*std}'`
+        echo $min_f0
+        # Rule of thumb recipe; probably try with other window sizes?
+        bndapflen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 4.6 * 1000.0 / f0 + 0.5}'`
+        mcepflen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 2.3 * 1000.0 / f0 + 0.5}'`
+        f0flen=`awk -v f0=$min_f0 'BEGIN{printf "%d", 2.3 * 1000.0 / f0 + 0.5}'`
+        echo "using wsizes: $bndapflen $mcepflen"
+        subset_data_dir.sh --spk $spk data/$step 100000 data/${step}_$spk
+        #cp data/$step/pitch_feats.scp data/${step}_$spk/
+        # Regenerate pitch with more appropriate window
+        steps/make_pitch.sh --pitch-config conf/pitch.conf --frame_length $f0flen data/${step}_$spk exp/make_pitch/${step}_$spk  $featdir;
+        # Generate Band Aperiodicity feature
+        steps/make_bndap.sh --bndap-config conf/bndap.conf --frame_length $bndapflen data/${step}_$spk exp/make_bndap/${step}_$spk  $featdir
+        # Generate Mel Cepstral features
+        #steps/make_mcep.sh  --sample-frequency $srate --frame_length $mcepflen  data/${step}_$spk exp/make_mcep/${step}_$spk   $featdir	
+        steps/make_mcep.sh --sample-frequency $srate data/${step}_$spk exp/make_mcep/${step}_$spk   $featdir	
         # Merge features
         cat data/${step}_*/bndap_feats.scp > data/$step/bndap_feats.scp
         cat data/${step}_*/mcep_feats.scp > data/$step/mcep_feats.scp
