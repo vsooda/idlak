@@ -16,13 +16,9 @@ dict=data/dict_phone
 
 #config
 #0 not run; 1 run; 2 run and exit
-DATA_PREP=0
 DATA_PREP_MARY=1
-LANG_PREP_WORD=0
-LANG_PREP_PHONE228=0
 LANG_PREP_PHONE64=1
 EXTRACT_FEAT=1
-ALIGNMENT_WORD=0
 ALIGNMENT_PHONE=1
 GENERATE_LABLE=1
 GENERATE_STATE=1
@@ -32,31 +28,6 @@ CONVERT_FEATURE=1
 #rm -rf data
 spk="lbx"
 audio_dir=$corpus_dir/wav 
-
-echo "##### Step 0: data preparation #####"
-if [ $DATA_PREP -gt 0 ]; then
-    rm -rf data/{train,dev,full}
-    mkdir -p data/{train,dev}
-    mkdir -p data/full
-
-    for x in train dev; do
-        for nn in `find $corpus_dir/$x/wav/*.wav | sort -u | xargs -i basename {} .wav`; do
-          echo $nn $corpus_dir/$x/wav/$nn.wav >> data/$x/wav.scp
-        done
-        cp $corpus_dir/$x/utt2spk data/$x/
-        #cp $corpus_dir/$x/text data/$x/
-        cp $corpus_dir/$x/phones.txt data/$x/text
-        utils/utt2spk_to_spk2utt.pl data/$x/utt2spk > data/$x/spk2utt
-    done
-    cat data/train/utt2spk data/dev/utt2spk > data/full/utt2spk
-    cat data/train/text data/dev/text > data/full/text
-    cat data/train/wav.scp data/dev/wav.scp | sort  > data/full/wav.scp
-    utils/utt2spk_to_spk2utt.pl data/full/utt2spk > data/full/spk2utt
-    if [ $DATA_PREP -eq 2 ]; then
-        echo "exit in data prepare"
-        exit
-    fi
-fi
 
 echo "##### Step 0: data preparation #####"
 if [ $DATA_PREP_MARY -gt 0 ]; then
@@ -93,29 +64,6 @@ if [ $DATA_PREP_MARY -gt 0 ]; then
     fi
 fi
 
-
-
-echo "##### Step 1: prepare language #####"
-if [ $LANG_PREP_WORD -gt 0 ]; then
-  cd $H; mkdir -p data/{dict,lang,graph} && \
-  cp $thchs/resource/dict/{extra_questions.txt,nonsilence_phones.txt,optional_silence.txt,silence_phones.txt} $dict && \
-  cat $thchs/resource/dict/lexicon.txt $thchs/data_thchs30/lm_word/lexicon.txt | \
-  	grep -v '<s>' | grep -v '</s>' | sort -u > $dict/lexicon.txt || exit 1;
-  utils/prepare_lang.sh --position_dependent_phones false $dict "<SPOKEN_NOISE>" data/local/lang data/lang || exit 1;
-  gzip -c $thchs/data_thchs30/lm_word/word.3gram.lm > data/graph/word.3gram.lm.gz || exit 1;
-  utils/format_lm.sh data/lang data/graph/word.3gram.lm.gz $thchs/data_thchs30/lm_word/lexicon.txt data/graph/lang || exit 1;
-fi
-
-
-echo "make phone graph ..."
-if [ $LANG_PREP_PHONE228 -gt 0 ]; then
-  rm -rf $dict $lang
-  cd $H; mkdir -p data/{dict_phone,graph_phone,lang_phone} && \
-  cp $thchs/resource/dict/{extra_questions.txt,nonsilence_phones.txt,optional_silence.txt,silence_phones.txt} $dict  && \
-  cat $thchs/data_thchs30/lm_phone/lexicon.txt | grep -v '<eps>' | sort -u > $dict/lexicon.txt  && \
-  echo "<SIL> sil " >> $dict/lexicon.txt  || exit 1;
-  utils/prepare_lang.sh --position_dependent_phones false $dict "<SIL>" data/local/lang_phone data/lang_phone || exit 1;
-fi
 
 echo "make ph64"
 if [ $LANG_PREP_PHONE64 -gt 0 ]; then
@@ -186,62 +134,6 @@ echo "##### Step 3: forced alignment #####"
 utils/fix_data_dir.sh data/full
 utils/validate_lang.pl $lang
 
-
-if [ $ALIGNMENT_WORD -gt 0 ]; then
-    rm -rf exp exp-align
-    for step in full; do
-      steps/make_mfcc.sh data/$step exp/make_mfcc/$step $featdir
-      steps/compute_cmvn_stats.sh data/$step exp/make_mfcc/$step $featdir
-    done
-    # Now running the normal kaldi recipe for forced alignment
-    test=data/eval_mfcc
-    steps/train_mono.sh  --nj 1 --cmd "$train_cmd" \
-                  $train $lang $expa/mono
-    steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
-                $train $lang $expa/mono $expa/mono_ali
-    steps/train_deltas.sh --cmd "$train_cmd" \
-                 500 5000 $train $lang $expa/mono_ali $expa/tri1
-
-    steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
-                $train $lang $expa/tri1 $expa/tri1_ali
-    steps/train_deltas.sh --cmd "$train_cmd" \
-                 500 5000 $train $lang $expa/tri1_ali $expa/tri2
-
-    # Create alignments
-    steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
-        $train $lang $expa/tri2 $expa/tri2_ali_full
-
-    steps/train_deltas.sh --cmd "$train_cmd" \
-        --context-opts "--context-width=5 --central-position=2" \
-        500 5000 $train $lang $expa/tri2_ali_full $expa/quin
-
-    # Create alignments
-    steps/align_si.sh  --nj 1 --cmd "$train_cmd" \
-      $train $lang $expa/quin $expa/quin_ali_full
-
-    # Convert to phone-state alignement
-    for step in full; do
-      ali=$expa/quin_ali_$step
-      # Extract phone alignment
-      ali-to-phones --per-frame $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:- \
-      | utils/int2sym.pl -f 2- $lang/phones.txt > $ali/phones.txt
-      # Extract state alignment
-      ali-to-hmmstate $ali/final.mdl ark:"gunzip -c $ali/ali.*.gz|" ark,t:$ali/states.tra
-      # Extract word alignment
-      linear-to-nbest ark:"gunzip -c $ali/ali.*.gz|" \
-      ark:"utils/sym2int.pl --map-oov 1669 -f 2- $lang/words.txt < data/$step/text |" '' '' ark:- \
-      | lattice-align-words-lexicon $lang/phones/align_lexicon.int $ali/final.mdl ark:- ark:-  \
-      | nbest-to-ctm --frame-shift=$FRAMESHIFT --precision=3 ark:- - \
-      | utils/int2sym.pl -f 5 $lang/words.txt > $ali/wrdalign.dat
-    done
-
-    if [ $ALIGNMENT_WORD -eq 2 ]; then
-        echo "exit after alignment"
-        exit
-    fi
-fi
-
-
 if [ $ALIGNMENT_PHONE -gt 0 ]; then
     rm -rf exp exp-align
     for step in full; do
@@ -307,8 +199,6 @@ if [ $GENERATE_LABLE -gt 0 ]; then
         }
         print lasttoken, lasttime, currenttime >> outfile
     }'
-
-    #todo: state frame counter
 
     if [ $GENERATE_LABLE -eq 2 ]; then
         echo "exit after phone alignment"
