@@ -6,7 +6,7 @@ thchs=/home/sooda/data/thchs30-openslr
 srate=16000
 FRAMESHIFT=0.005
 featdir=/home/sooda/features
-corpus_dir=/home/sooda/data/kaldi64
+corpus_dir=/home/sooda/data/tts/labixx120
 #lang=data/lang
 #dict=data/dict
 expa=exp-align
@@ -16,18 +16,18 @@ dict=data/dict_phone
 
 #config
 #0 not run; 1 run; 2 run and exit
-DATA_PREP_MARY=1
-LANG_PREP_PHONE64=1
-EXTRACT_FEAT=1
-ALIGNMENT_PHONE=1
-GENERATE_LABLE=1
-GENERATE_STATE=1
-CONVERT_FEATURE=1
-
-# Clean up
-#rm -rf data
+DATA_PREP_MARY=0
+LANG_PREP_PHONE64=0
+EXTRACT_FEAT=0
+ALIGNMENT_PHONE=0
+GENERATE_LABLE=0
+GENERATE_STATE=0
+CONVERT_FEATURE=0
 spk="lbx"
 audio_dir=$corpus_dir/wav 
+prompt_lab=prompt_labels
+state_lab=states
+lab=labels
 
 echo "##### Step 0: data preparation #####"
 if [ $DATA_PREP_MARY -gt 0 ]; then
@@ -36,8 +36,8 @@ if [ $DATA_PREP_MARY -gt 0 ]; then
     mkdir -p data/{train,dev}
     mkdir -p data/full
 
-    dev_pat='hs_zh_arctic_lbx_00??2'
-    dev_rgx='hs_zh_arctic_lbx_00..2'
+    dev_pat='hs_zh_arctic_lbx_00??3'
+    dev_rgx='hs_zh_arctic_lbx_00..3'
     train_pat='hs_zh_arctic_lbx_?????'
     train_rgx='hs_zh_arctic_lbx_.....'
 
@@ -180,15 +180,16 @@ if [ $ALIGNMENT_PHONE -gt 0 ]; then
 fi
 
 if [ $GENERATE_LABLE -gt 0 ]; then
-    rm labels/*
-    cat $expa/quin_ali_full/phones.txt | awk -v frameshift=$FRAMESHIFT '
+    mkdir -p $prompt_lab
+    rm $prompt_lab/*
+    cat $expa/quin_ali_full/phones.txt | awk -v frameshift=$FRAMESHIFT -v labeldir=$prompt_lab '
     {
         lasttime = 0;
         lasttoken="";
         currenttime=0;
     }
     {
-        outfile = "labels/"$1".lab";
+        outfile = labeldir"/"$1".lab";
         for(i=2;i<=NF;i++) {
             currenttime = currenttime + frameshift;
             if (lasttoken != "" && lasttoken != $i) {
@@ -207,15 +208,15 @@ if [ $GENERATE_LABLE -gt 0 ]; then
 fi
 
 if [ $GENERATE_STATE -gt 0 ]; then
-    mkdir -p states
-    rm states/*
-    cat $expa/quin_ali_full/states.tra | awk -v STATE=5 '
+    mkdir -p $state_lab
+    rm $state_lab/*
+    cat $expa/quin_ali_full/states.tra | awk -v statedir=$state_lab '
     {
         laststate = -1;
         counter = 0;
     }
     {
-        outfile = "states/"$1".sta";
+        outfile = statedir"/"$1".sta";
         for(i=2;i<=NF;i++) {
             if (laststate != $i && laststate != -1) {
                 printf "%d %d ", laststate, counter > outfile
@@ -229,70 +230,80 @@ if [ $GENERATE_STATE -gt 0 ]; then
 
     }'
 
+    # paste the phone alignment and state aliment
+    mkdir -p $lab
+    rm -rf $lab/*
+    for nn in `find $prompt_lab/*.lab | sort -u | xargs -i basename {} .lab`; do
+        statename=$state_lab/$nn.sta
+        labelname=$prompt_lab/$nn.lab
+        mergelab=$lab/$nn.lab
+        paste $labelname $statename -d '|' | sed 's/\t/ /g' > $mergelab
+    done
+
     if [ $GENERATE_STATE -eq 2 ]; then
         echo "exit after state alignment"
         exit
     fi
 fi
 
-if [ $CONVERT_FEATURE -gt 0 ]; then
-  step=test1
-  cat data/001.feat \
-  | awk '{print $1, "["; $1=""; na = split($0, a, ";"); for (i = 1; i < na; i++) print a[i]; print "]"}' \
-  | copy-feats ark:- ark,t,scp:$featdir/in_feats_$step.ark,$featdir/in_feats_$step.scp
 
+
+if [ $CONVERT_FEATURE -gt 0 ]; then
+    step=full
+    cat $corpus_dir/ali \
+    | awk '{print $1, "["; $1=""; na = split($0, a, ";"); for (i = 1; i < na; i++) print a[i]; print "]"}' \
+    | copy-feats ark:- ark,t,scp:$featdir/in_feats_$step.ark,$featdir/in_feats_$step.scp
+
+    # HACKY
+    # Generate features for duration modelling
+    # we remove relative position within phone and state
+    copy-feats ark:$featdir/in_feats_full.ark ark,t:- \
+    | awk -v nstate=5 'BEGIN{oldkey = 0; oldstate = -1; for (s = 0; s < nstate; s++) asd[s] = 0}
+    function print_phone(vkey, vasd, vpd) {
+      for (s = 0; s < nstate; s++) {
+        print vkey, s, vasd[s], vpd;
+        vasd[s] = 0;
+      }
+    }
+    (NF == 2){print}
+    (NF > 2){
+      n = NF;
+      if ($NF == "]") n = NF - 1;
+      state = $(n-4); sd = $(n-3); pd = $(n-1);
+      for (i = n-4; i <= NF; i++) $i = "";
+      len = length($0);
+      if (n != NF) len = len -1;
+      key = substr($0, 1, len - 5);
+      if ((key != oldkey) && (oldkey != 0)) {
+        print_phone(oldkey, asd, opd);
+        oldstate = -1;
+      }
+      if (state != oldstate) {
+        asd[state] += sd;
+      }
+      opd = pd;
+      oldkey = key;
+      oldstate = state;
+      if (NF != n) {
+        print_phone(key, asd, opd);
+        oldstate = -1;
+        oldkey = 0;
+        print "]";
+      }
+    }' > $featdir/tmp_durfeats_full.ark
+
+    duration_feats="ark:$featdir/tmp_durfeats_full.ark"
+    nfeats=$(feat-to-dim "$duration_feats" -)
+
+    # Input
+    select-feats 0-$(( $nfeats - 3 )) "$duration_feats" ark,scp:$featdir/in_durfeats_full.ark,$featdir/in_durfeats_full.scp
+    # Output: duration of phone and state are assumed to be the 2 last features
+    select-feats $(( $nfeats - 2 ))-$(( $nfeats - 1 )) "$duration_feats" ark,scp:$featdir/out_durfeats_full.ark,$featdir/out_durfeats_full.scp
     if [ $CONVERT_FEATURE -eq 2 ]; then
         echo "exit after phone alignment"
         exit
     fi
 fi
-
-# get outside 
-
-# HACKY
-# Generate features for duration modelling
-# we remove relative position within phone and state
-copy-feats ark:$featdir/in_feats_full.ark ark,t:- \
-| awk -v nstate=5 'BEGIN{oldkey = 0; oldstate = -1; for (s = 0; s < nstate; s++) asd[s] = 0}
-function print_phone(vkey, vasd, vpd) {
-  for (s = 0; s < nstate; s++) {
-    print vkey, s, vasd[s], vpd;
-    vasd[s] = 0;
-  }
-}
-(NF == 2){print}
-(NF > 2){
-  n = NF;
-  if ($NF == "]") n = NF - 1;
-  state = $(n-4); sd = $(n-3); pd = $(n-1);
-  for (i = n-4; i <= NF; i++) $i = "";
-  len = length($0);
-  if (n != NF) len = len -1;
-  key = substr($0, 1, len - 5);
-  if ((key != oldkey) && (oldkey != 0)) {
-    print_phone(oldkey, asd, opd);
-    oldstate = -1;
-  }
-  if (state != oldstate) {
-    asd[state] += sd;
-  }
-  opd = pd;
-  oldkey = key;
-  oldstate = state;
-  if (NF != n) {
-    print_phone(key, asd, opd);
-    oldstate = -1;
-    oldkey = 0;
-    print "]";
-  }
-}' > $featdir/tmp_durfeats_full.ark
-
-duration_feats="ark:$featdir/tmp_durfeats_full.ark"
-nfeats=$(feat-to-dim "$duration_feats" -)
-# Input
-select-feats 0-$(( $nfeats - 3 )) "$duration_feats" ark,scp:$featdir/in_durfeats_full.ark,$featdir/in_durfeats_full.scp
-# Output: duration of phone and state are assumed to be the 2 last features
-select-feats $(( $nfeats - 2 ))-$(( $nfeats - 1 )) "$duration_feats" ark,scp:$featdir/out_durfeats_full.ark,$featdir/out_durfeats_full.scp
 
 # Split in train / dev
 for step in train dev; do
