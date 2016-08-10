@@ -37,11 +37,13 @@ audio_dir=$corpus_dir/wav
 prompt_lab=prompt_labels
 state_lab=states
 lab=labels
+acdir=data
+lbldir=lbldata
 
 echo "##### Step 0: data preparation #####"
 if [ $DATA_PREP_MARY -gt 0 ]; then
-    #rm -rf data/{train,dev,full}
-    rm -rf data/*
+    rm -rf data/{train,dev,full}
+    #rm -rf data/*
     mkdir -p data/{train,dev}
     mkdir -p data/full
 
@@ -241,7 +243,7 @@ if [ $GENERATE_STATE -gt 0 ]; then
 
     # paste the phone alignment and state aliment
     mkdir -p $lab
-    rm -rf $lab/*
+    rm -rf $lab/*.lab
     for nn in `find $prompt_lab/*.lab | sort -u | xargs -i basename {} .lab`; do
         statename=$state_lab/$nn.sta
         labelname=$prompt_lab/$nn.lab
@@ -339,8 +341,6 @@ if [ $CONVERT_FEATURE -gt 0 ]; then
       steps/compute_cmvn_stats.sh $dir $dir $dir
     done
 
-    acdir=data
-    lbldir=lbldata
 
     #ensure consistency in lists
     #for dir in $lbldir $acdir; do
@@ -438,7 +438,7 @@ mkdir -p data/eval
 # Generate CEX features for test set.
 for step in eval; do
   # Generate input feature for duration modelling
-  cat $test_dir/ali.test \
+  cat $test_dir/durali \
   | awk '{print $1, "["; $1=""; na = split($0, a, ";"); for (i = 1; i < na; i++) for (state = 0; state < 5; state++) print a[i], state; print "]"}' \
   | copy-feats ark:- ark,scp:$featdir/in_durfeats_$step.ark,$featdir/in_durfeats_$step.scp
 done
@@ -460,7 +460,7 @@ utils/make_forward_fmllr.sh $expdurdir $lbldurdir/eval $expdurdir/tst_forward/ "
 
 testAlignDir=test_labels
 mkdir -p $testAlignDir
-rm -rf $testAlignDir/* 
+rm -rf $testAlignDir/*.lab
 
 #  2. make the duration consistent, generate labels with duration information added
 for cmp in $expdurdir/tst_forward/cmp/*.cmp; do
@@ -497,21 +497,27 @@ for cmp in $expdurdir/tst_forward/cmp/*.cmp; do
     if (sd[1] <= 0) sd[1] = 1;
     smpd = 0;
     for (i = 1; i <= nstate; i++) smpd += sd[i % nstate];
+    tend = tstart + smpd * 0.005
+    printf "%f %f | ", tstart, tend > outfile
     for (i = 1; i <= nstate; i++) {
       if (sd[i % nstate] > 0) {
-        tend = tstart + sd[i % nstate] * 50000;
-        print tstart, tend, int(NR / 5), i-1 >> outfile
-        tstart = tend;
+        #tend = tstart + sd[i % nstate] * 0.005;
+        #print tstart, tend, int(NR / 5), i-1 >> outfile
+        #tstart = tend;
+        printf "%d %d ", i-1, sd[i%nstate] >> outfile
       }
     }
+    printf "\n" >> outfile
+    tstart = tend;
     pd = 0;
   }'
 done
 
 # 3. Turn them into DNN input labels (i.e. one sample per frame)
 for step in eval; do
-  python utils/make_fullctx_mlf_dnn.py data/$step/synth_lab.mlf data/$step/cex.ark data/$step/feat.ark
-  copy-feats ark:data/$step/feat.ark ark,scp:$featdir/in_feats_$step.ark,$featdir/in_feats_$step.scp
+    cat $test_dir/dnnali \
+    | awk '{print $1, "["; $1=""; na = split($0, a, ";"); for (i = 1; i < na; i++) print a[i]; print "]"}' \
+    | copy-feats ark:- ark,t,scp:$featdir/in_feats_$step.ark,$featdir/in_feats_$step.scp
 done
 for step in eval; do
   dir=lbldata/$step
