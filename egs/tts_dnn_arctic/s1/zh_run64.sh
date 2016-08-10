@@ -7,6 +7,7 @@ srate=16000
 FRAMESHIFT=0.005
 featdir=/home/sooda/features
 corpus_dir=/home/sooda/data/tts/labixx120
+test_dir=/home/sooda/data/tts/test
 #lang=data/lang
 #dict=data/dict
 expa=exp-align
@@ -14,6 +15,11 @@ train=data/full
 lang=data/lang_phone
 dict=data/dict_phone
 
+exp=exp_dnn
+durdir=durdata
+lbldurdir=lbldurdata
+expdurdir=$exp/tts_dnn_dur_3_delta_quin5
+dnndir=$exp/tts_dnn_train_3_deltasc2_quin5
 #config
 #0 not run; 1 run; 2 run and exit
 DATA_PREP_MARY=0
@@ -23,6 +29,9 @@ ALIGNMENT_PHONE=0
 GENERATE_LABLE=0
 GENERATE_STATE=0
 CONVERT_FEATURE=0
+TRAIN_DNN=0
+PACKAGE_DNN=0
+VOCODER_TEST=0
 spk="lbx"
 audio_dir=$corpus_dir/wav 
 prompt_lab=prompt_labels
@@ -299,82 +308,85 @@ if [ $CONVERT_FEATURE -gt 0 ]; then
     select-feats 0-$(( $nfeats - 3 )) "$duration_feats" ark,scp:$featdir/in_durfeats_full.ark,$featdir/in_durfeats_full.scp
     # Output: duration of phone and state are assumed to be the 2 last features
     select-feats $(( $nfeats - 2 ))-$(( $nfeats - 1 )) "$duration_feats" ark,scp:$featdir/out_durfeats_full.ark,$featdir/out_durfeats_full.scp
+
+    # Split in train / dev
+    for step in train dev; do
+      dir=lbldata/$step
+      mkdir -p $dir
+      #cp data/$step/{utt2spk,spk2utt} $dir
+      utils/filter_scp.pl data/$step/utt2spk $featdir/in_feats_full.scp > $dir/feats.scp
+      cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
+      utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
+      steps/compute_cmvn_stats.sh $dir $dir $dir
+    done
+
+    # Same for duration
+    for step in train dev; do
+      dir=lbldurdata/$step
+      mkdir -p $dir
+      #cp data/$step/{utt2spk,spk2utt} $dir
+      utils/filter_scp.pl data/$step/utt2spk $featdir/in_durfeats_full.scp > $dir/feats.scp
+      cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
+      utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
+      steps/compute_cmvn_stats.sh $dir $dir $dir
+
+      dir=durdata/$step
+      mkdir -p $dir
+      #cp data/$step/{utt2spk,spk2utt} $dir
+      utils/filter_scp.pl data/$step/utt2spk $featdir/out_durfeats_full.scp > $dir/feats.scp
+      cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
+      utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
+      steps/compute_cmvn_stats.sh $dir $dir $dir
+    done
+
+    acdir=data
+    lbldir=lbldata
+
+    #ensure consistency in lists
+    #for dir in $lbldir $acdir; do
+    for class in train dev; do
+      cp $lbldir/$class/feats.scp $lbldir/$class/feats_full.scp
+      cp $acdir/$class/feats.scp $acdir/$class/feats_full.scp
+      cat $acdir/$class/feats_full.scp | awk -v lst=$lbldir/$class/feats_full.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $acdir/$class/feats.scp
+      cat $lbldir/$class/feats_full.scp | awk -v lst=$acdir/$class/feats_full.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $lbldir/$class/feats.scp
+    done
     if [ $CONVERT_FEATURE -eq 2 ]; then
-        echo "exit after phone alignment"
+        echo "exit after convert feature"
         exit
     fi
 fi
 
-# Split in train / dev
-for step in train dev; do
-  dir=lbldata/$step
-  mkdir -p $dir
-  #cp data/$step/{utt2spk,spk2utt} $dir
-  utils/filter_scp.pl data/$step/utt2spk $featdir/in_feats_full.scp > $dir/feats.scp
-  cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
-  utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
-  steps/compute_cmvn_stats.sh $dir $dir $dir
-done
-
-# Same for duration
-for step in train dev; do
-  dir=lbldurdata/$step
-  mkdir -p $dir
-  #cp data/$step/{utt2spk,spk2utt} $dir
-  utils/filter_scp.pl data/$step/utt2spk $featdir/in_durfeats_full.scp > $dir/feats.scp
-  cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
-  utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
-  steps/compute_cmvn_stats.sh $dir $dir $dir
-
-  dir=durdata/$step
-  mkdir -p $dir
-  #cp data/$step/{utt2spk,spk2utt} $dir
-  utils/filter_scp.pl data/$step/utt2spk $featdir/out_durfeats_full.scp > $dir/feats.scp
-  cat data/$step/utt2spk | awk -v lst=$dir/feats.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $dir/utt2spk
-  utils/utt2spk_to_spk2utt.pl < $dir/utt2spk > $dir/spk2utt
-  steps/compute_cmvn_stats.sh $dir $dir $dir
-done
-
-acdir=data
-lbldir=lbldata
-
-#ensure consistency in lists
-#for dir in $lbldir $acdir; do
-for class in train dev; do
-  cp $lbldir/$class/feats.scp $lbldir/$class/feats_full.scp
-  cp $acdir/$class/feats.scp $acdir/$class/feats_full.scp
-  cat $acdir/$class/feats_full.scp | awk -v lst=$lbldir/$class/feats_full.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $acdir/$class/feats.scp
-  cat $lbldir/$class/feats_full.scp | awk -v lst=$acdir/$class/feats_full.scp 'BEGIN{ while (getline < lst) n[$1] = 1}{if (n[$1]) print}' > $lbldir/$class/feats.scp
-done
 
 ##############################
 ## 4. Train DNN
 ##############################
 
-echo "##### Step 4: training DNNs #####"
+if [ $TRAIN_DNN -gt 0 ]; then
+    echo "##### Step 4: training DNNs #####"
 
-exp=exp_dnn
-mkdir -p $exp
+    mkdir -p $exp
 
-# Very basic one for testing
-#mkdir -p $exp
-#dir=$exp/tts_dnn_train_3e
-#$cuda_cmd $dir/_train_nnet.log steps/train_nnet_basic.sh --config conf/3-layer-nn.conf --learn_rate 0.2 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --randomize true --bunch_size 50 --mlpOption " " --hid-dim 300 $lbldir/train $lbldir/dev $acdir/train $acdir/dev $dir
+    # Very basic one for testing
+    #mkdir -p $exp
+    #dir=$exp/tts_dnn_train_3e
+    #$cuda_cmd $dir/_train_nnet.log steps/train_nnet_basic.sh --config conf/3-layer-nn.conf --learn_rate 0.2 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --randomize true --bunch_size 50 --mlpOption " " --hid-dim 300 $lbldir/train $lbldir/dev $acdir/train $acdir/dev $dir
 
-echo " ### Step 4a: duration model DNN ###"
-# A. Small one for duration modelling
-durdir=durdata
-lbldurdir=lbldurdata
-expdurdir=$exp/tts_dnn_dur_3_delta_quin5
-rm -rf $expdurdir
-$cuda_cmd $expdurdir/_train_nnet.log steps/train_nnet_basic.sh --delta_order 2 --config conf/3-layer-nn-splice5.conf --learn_rate 0.02 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --max_iters 50 --randomize true --cache_size 50000 --bunch_size 200 --mlpOption " " --hid-dim 100 $lbldurdir/train $lbldurdir/dev $durdir/train $durdir/dev $expdurdir
+    echo " ### Step 4a: duration model DNN ###"
+    # A. Small one for duration modelling
+    rm -rf $expdurdir
+    $cuda_cmd $expdurdir/_train_nnet.log steps/train_nnet_basic.sh --delta_order 2 --config conf/3-layer-nn-splice5.conf --learn_rate 0.02 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --max_iters 50 --randomize true --cache_size 50000 --bunch_size 200 --mlpOption " " --hid-dim 100 $lbldurdir/train $lbldurdir/dev $durdir/train $durdir/dev $expdurdir
 
-# B. Larger DNN for acoustic features
-echo " ### Step 4b: acoustic model DNN ###"
+    # B. Larger DNN for acoustic features
+    echo " ### Step 4b: acoustic model DNN ###"
 
-dnndir=$exp/tts_dnn_train_3_deltasc2_quin5
-rm -rf $dnndir
-$cuda_cmd $dnndir/_train_nnet.log steps/train_nnet_basic.sh --delta_order 2 --config conf/3-layer-nn-splice5.conf --learn_rate 0.04 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --randomize true --cache_size 50000 --bunch_size 200 --mlpOption " " --hid-dim 700 $lbldir/train $lbldir/dev $acdir/train $acdir/dev $dnndir
+    rm -rf $dnndir
+    $cuda_cmd $dnndir/_train_nnet.log steps/train_nnet_basic.sh --delta_order 2 --config conf/3-layer-nn-splice5.conf --learn_rate 0.04 --momentum 0.1 --halving-factor 0.5 --min_iters 15 --randomize true --cache_size 50000 --bunch_size 200 --mlpOption " " --hid-dim 700 $lbldir/train $lbldir/dev $acdir/train $acdir/dev $dnndir
+
+    if [ $TRAIN_DNN -eq 2 ]; then
+        echo "exit after train dnn"
+        exit
+    fi
+fi
 
 ##############################
 ## 5. Synthesis
@@ -398,13 +410,16 @@ elif [ "$srate" == "44100" ]; then
 fi
 
 echo "##### Step 5: synthesis #####"
-# Original samples:
-echo "Synthesizing vocoded training samples"
-mkdir -p exp_dnn/orig2/cmp exp_dnn/orig2/wav
-copy-feats scp:data/dev/feats.scp ark,t:- | awk -v dir=exp_dnn/orig2/cmp/ '($2 == "["){if (out) close(out); out=dir $1 ".cmp";}($2 != "["){if ($NF == "]") $NF=""; print $0 > out}'
-for cmp in exp_dnn/orig2/cmp/*.cmp; do
-  utils/mlsa_synthesis_63_mlpg.sh --voice_thresh 0.5 --alpha $alpha --fftlen $fftlen --srate $srate --bndap_order $bndap_order --mcep_order $order $cmp exp_dnn/orig2/wav/`basename $cmp .cmp`.wav
-done
+
+if [ $VOCODER_TEST -gt 0 ]; then
+    # Original samples:
+    echo "Synthesizing vocoded training samples"
+    mkdir -p exp_dnn/orig2/cmp exp_dnn/orig2/wav
+    copy-feats scp:data/dev/feats.scp ark,t:- | awk -v dir=exp_dnn/orig2/cmp/ '($2 == "["){if (out) close(out); out=dir $1 ".cmp";}($2 != "["){if ($NF == "]") $NF=""; print $0 > out}'
+    for cmp in exp_dnn/orig2/cmp/*.cmp; do
+      utils/mlsa_synthesis_63_mlpg.sh --voice_thresh 0.5 --alpha $alpha --fftlen $fftlen --srate $srate --bndap_order $bndap_order --mcep_order $order $cmp exp_dnn/orig2/wav/`basename $cmp .cmp`.wav
+    done
+fi
 
 # Variant with mlpg: requires mean / variance from coefficients
 copy-feats scp:data/train/feats.scp ark:- \
@@ -416,19 +431,14 @@ copy-feats scp:data/train/feats.scp ark:- \
 END{for (i = 1; i <= nv; i++) print mean[i], var[i]}' \
 > data/train/var_cmp.txt
 
-echo "  ###  5b: Alice samples synthesis ###"
+echo "  ###  5b: labixx samples synthesis ###"
 # Alice test set
 mkdir -p data/eval
-cp $KALDI_ROOT/idlak-data/en/testdata/alice.xml data/eval/text.xml
 
 # Generate CEX features for test set.
 for step in eval; do
-  idlaktxp --pretty --tpdb=$tpdb data/$step/text.xml - \
-  | idlakcex --pretty --cex-arch=default --tpdb=$tpdb - data/$step/text_full.xml
-  python $KALDI_ROOT/idlak-voice-build/utils/idlak_make_lang.py --mode 2 -r "alice" \
-  data/$step/text_full.xml data/full/cex.ark.freq data/$step/cex.ark > data/$step/cex_output_dump
   # Generate input feature for duration modelling
-  cat data/$step/cex.ark \
+  cat $test_dir/ali.test \
   | awk '{print $1, "["; $1=""; na = split($0, a, ";"); for (i = 1; i < na; i++) for (state = 0; state < 5; state++) print a[i], state; print "]"}' \
   | copy-feats ark:- ark,scp:$featdir/in_durfeats_$step.ark,$featdir/in_durfeats_$step.scp
 done
@@ -447,26 +457,37 @@ done
 echo "Synthesizing MLPG eval samples"
 #  1. forward pass through duration DNN
 utils/make_forward_fmllr.sh $expdurdir $lbldurdir/eval $expdurdir/tst_forward/ ""
+
+testAlignDir=test_labels
+mkdir -p $testAlignDir
+rm -rf $testAlignDir/* 
+
 #  2. make the duration consistent, generate labels with duration information added
-(echo '#!MLF!#'; for cmp in $expdurdir/tst_forward/cmp/*.cmp; do
-  cat $cmp | awk -v nstate=5 -v id=`basename $cmp .cmp` 'BEGIN{print "\"" id ".lab\""; tstart = 0 }
+for cmp in $expdurdir/tst_forward/cmp/*.cmp; do
+  cat $cmp | awk -v outdir=$testAlignDir -v nstate=5 -v id=`basename $cmp .cmp` '
+  BEGIN{
+    print "\"" id ".lab\""; 
+    outfile = outdir"/"id".lab"
+    tstart = 0 
+  }
   {
     pd += $2;
-    sd[NR % nstate] = $1}
-    (NR % nstate == 0){
-      mpd = pd / nstate;
-      smpd = 0;
-      for (i = 1; i <= nstate; i++) smpd += sd[i % nstate];
-      rmpd = int((smpd + mpd) / 2 + 0.5);
-      # Normal phones
-      if (int(sd[0] + 0.5) == 0) {
-        for (i = 1; i <= 3; i++) {
-          sd[i % nstate] = int(sd[i % nstate] / smpd * rmpd + 0.5);
-        }
-        if (sd[3] <= 0) sd[3] = 1;
-        for (i = 4; i <= nstate; i++) sd[i % nstate] = 0;
+    sd[NR % nstate] = $1
+  }
+  (NR % nstate == 0){
+    mpd = pd / nstate;
+    smpd = 0;
+    for (i = 1; i <= nstate; i++) smpd += sd[i % nstate];
+    rmpd = int((smpd + mpd) / 2 + 0.5);
+    # Normal phones
+    if (int(sd[0] + 0.5) == 0) {
+      for (i = 1; i <= 3; i++) {
+        sd[i % nstate] = int(sd[i % nstate] / smpd * rmpd + 0.5);
       }
-      # Silence phone
+      if (sd[3] <= 0) sd[3] = 1;
+      for (i = 4; i <= nstate; i++) sd[i % nstate] = 0;
+    }
+    # Silence phone
     else {
       for (i = 1; i <= nstate; i++) {
         sd[i % nstate] = int(sd[i % nstate] / smpd * rmpd + 0.5);
@@ -479,13 +500,14 @@ utils/make_forward_fmllr.sh $expdurdir $lbldurdir/eval $expdurdir/tst_forward/ "
     for (i = 1; i <= nstate; i++) {
       if (sd[i % nstate] > 0) {
         tend = tstart + sd[i % nstate] * 50000;
-        print tstart, tend, int(NR / 5), i-1;
+        print tstart, tend, int(NR / 5), i-1 >> outfile
         tstart = tend;
       }
     }
     pd = 0;
   }'
-done) > data/eval/synth_lab.mlf
+done
+
 # 3. Turn them into DNN input labels (i.e. one sample per frame)
 for step in eval; do
   python utils/make_fullctx_mlf_dnn.py data/$step/synth_lab.mlf data/$step/cex.ark data/$step/feat.ark
@@ -508,21 +530,12 @@ mkdir -p $dnndir/tst_forward/wav_mlpg/; for cmp in $dnndir/tst_forward/cmp/*.cmp
   utils/mlsa_synthesis_63_mlpg.sh --voice_thresh 0.5 --alpha $alpha --fftlen $fftlen --srate $srate --bndap_order $bndap_order --mcep_order $order --delta_order 2 $cmp $dnndir/tst_forward/wav_mlpg/`basename $cmp .cmp`.wav data/train/var_cmp.txt
 done
 
-echo "
-*********************
-** Congratulations **
-*********************
-TTS-DNN trained and sample synthesis done.
+if [ $PACKAGE_DNN -gt 0 ]; then
+    echo "#### Step 6: packaging DNN voice ####"
 
-Samples can be found in $dnndir/tst_forward/wav_mlpg/*.wav.
+    utils/make_dnn_voice.sh --spk $spk --srate $srate --mcep_order $order --bndap_order $bndap_order --alpha $alpha --fftlen $fftlen
 
-More synthesis can be performed using the utils/synthesis_test.sh utility,
-e.g.: echo 'Test 1 2 3' | utils/synthesis_test.sh
-"
-echo "#### Step 6: packaging DNN voice ####"
-
-utils/make_dnn_voice.sh --spk $spk --srate $srate --mcep_order $order --bndap_order $bndap_order --alpha $alpha --fftlen $fftlen
-
-echo "Voice packaged successfully. Portable models have been stored in ${spk}_mdl."
-echo "Synthesis can be performed using:
-echo \"This is a demo of D N N synthesis\" | utils/synthesis_voice.sh ${spk}_mdl <outdir>"
+    echo "Voice packaged successfully. Portable models have been stored in ${spk}_mdl."
+    echo "Synthesis can be performed using:
+    echo \"This is a demo of D N N synthesis\" | utils/synthesis_voice.sh ${spk}_mdl <outdir>"
+fi
